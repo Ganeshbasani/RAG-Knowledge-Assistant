@@ -1,5 +1,5 @@
 
-# 🚀 RAG Knowledge Assistant
+  RAG Knowledge Assistant
 
 <p align="center">
   <img src="https://readme-typing-svg.demolab.com?font=Fira+Code&size=28&pause=1000&center=true&vCenter=true&width=900&lines=AI-Powered+RAG+Knowledge+Assistant;Hybrid+Search+%7C+Semantic+Retrieval;FastAPI+%7C+Vector+Ready+%7C+Production+Ready;+by+Ganesh+Basani" alt="Typing SVG" />
