@@ -1,235 +1,209 @@
-# RAG Knowledge Assistant
 
-`rag-knowledge-assistant` is an open-source RAG API with smart chunking, hybrid retrieval, rerankers, and a built-in eval harness.
+# 🚀 RAG Knowledge Assistant
 
-The API supports lexical TF-IDF retrieval, pluggable semantic embeddings, query traces, and offline retrieval evaluation.
+<p align="center">
+  <img src="https://readme-typing-svg.demolab.com?font=Fira+Code&size=28&pause=1000&center=true&vCenter=true&width=900&lines=AI-Powered+RAG+Knowledge+Assistant;Hybrid+Search+%7C+Semantic+Retrieval;FastAPI+%7C+Vector+Ready+%7C+Production+Ready;+by+Ganesh+Basani" alt="Typing SVG" />
+</p>
 
----
-
-## Current status
-
-- Version: `0.3.0`
-- Storage can be run in-memory (default) or with file-backed persistence.
-- Auth, rate limiting, request validation responses, metrics, and health endpoints included.
-
----
-
-## Features
-
-- Ingest and chunk documents via HTTP with `tokens`, `sentence`, `paragraph`, or `smart` chunking.
-- TF-IDF, semantic, and hybrid retrieval modes.
-- Lightweight lexical reranker (`term_overlap`) and reciprocal-rank fusion for hybrid search.
-- Query traces that expose retrieval stages and candidate counts.
-- Retrieval eval harness via API and Python helper.
-- File-backed persistence with resumable startup index loading.
-- Pluggable semantic providers (`sentence_transformers`, `local`, `local_tfidf`, `onnx_local`).
-- Config/env-first runtime configuration.
-- Optional static API key middleware.
-- Input abuse controls (payload size), request ID headers, and rate limiting.
-- Structured error payloads and OpenAPI-documented failure modes.
-- Observability endpoint (`/metrics`) plus health and readiness checks.
-- Docker/Compose defaults for durable storage mount.
+<p align="center">
+<img src="https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python"/>
+<img src="https://img.shields.io/badge/FastAPI-Production-009688?style=for-the-badge&logo=fastapi"/>
+<img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge"/>
+<img src="https://img.shields.io/badge/RAG-Hybrid%20Retrieval-blueviolet?style=for-the-badge"/>
+</p>
 
 ---
 
-## Environment configuration
+## ✨ Overview
 
-The app reads settings from environment variables, including:
+RAG Knowledge Assistant is a production-ready Retrieval-Augmented Generation backend designed for scalable document intelligence.
 
-- `RAG_SERVICE_NAME`
-- `RAG_STORAGE_PATH` (optional; when set, chunks are persisted to disk)
-- `RAG_API_KEY` (optional static API key)
-- `RAG_RATE_LIMIT_REQUESTS`
-- `RAG_RATE_LIMIT_WINDOW_SECONDS`
-- `RAG_MAX_REQUEST_BYTES`
-- `RAG_DEFAULT_CHUNK_SIZE`
-- `RAG_DEFAULT_CHUNK_OVERLAP`
-- `RAG_DEFAULT_EMBEDDING_MODEL`
-- `RAG_HOST`
-- `RAG_PORT`
-- `RAG_RELOAD`
-- `RAG_LOG_LEVEL`
-- `RAG_DOCS_ENABLED`
-- `RAG_ALLOWED_ORIGINS`
-
-See `.env.example` for a complete starter configuration.
+It combines lexical search, semantic embeddings, hybrid retrieval, reranking, evaluation tools, persistent storage, observability, and secure APIs into one developer-friendly platform.
 
 ---
 
-## Quickstart
+# 🌟 Highlights
 
-### 1) Install
+- Smart Document Chunking
+- Hybrid Retrieval
+- TF-IDF + Semantic Search
+- Reciprocal Rank Fusion
+- Query Tracing
+- Evaluation Harness
+- API Key Authentication
+- Rate Limiting
+- Docker Ready
+- Render + Vercel Deployment
+- Metrics & Health Checks
+
+---
+
+# 🏗 Architecture
+
+```text
+                User
+                  │
+          FastAPI REST API
+                  │
+      ┌───────────┴────────────┐
+      │                        │
+Document Ingestion       Query Engine
+      │                        │
+ Smart Chunking        Hybrid Retrieval
+      │                        │
+ TF-IDF + Embeddings + Reranker
+                  │
+          Ranked Context
+                  │
+             Final Response
+```
+
+---
+
+# ⚡ Features
+
+| Feature | Description |
+|----------|-------------|
+| Smart Chunking | Token, Sentence, Paragraph & AI-aware |
+| Hybrid Retrieval | TF-IDF + Semantic |
+| Semantic Providers | sentence-transformers, local, ONNX |
+| Query Trace | Debug retrieval pipeline |
+| Evaluation | Offline benchmarking |
+| Security | API Keys + Validation |
+| Monitoring | Metrics + Health endpoints |
+| Deployment | Docker, Render, Vercel |
+
+---
+
+# 🚀 Quick Start
 
 ```bash
+git clone https://github.com/YOUR_USERNAME/rag-knowledge-assistant.git
+
+cd rag-knowledge-assistant
+
 python -m venv .venv
+
 source .venv/bin/activate
+
 pip install -e ".[dev]"
 ```
 
-For semantic dependencies:
-
-```bash
-pip install -e ".[dev,embeddings]"
-```
-
-For ONNX support:
-
-```bash
-pip install -e ".[dev,onnx]"
-```
-
-### 2) Run API
+Run
 
 ```bash
 cp .env.example .env
+
 uvicorn rag_assistant.api:app --reload --app-dir src
 ```
 
-### 2a) Smoke check (persistence + API key)
+Open
 
-```bash
-RAG_API_KEY=dev RAG_STORAGE_PATH=./data/rag-index.json uvicorn rag_assistant.api:app --reload --app-dir src
+```
+http://localhost:8000/docs
 ```
 
-### 3) Use the built-in UI
+---
+
+# 📂 Project Structure
 
 ```text
-http://localhost:8000/ui/
-```
-
-The page can ingest content and run both TF-IDF and semantic queries.
-If you configured an API key, paste it into the UI.
-
-### 4) Or run with CLI helper
-
-```bash
-python -m rag_assistant.cli
-```
-
-### 5) Ingest
-
-```bash
-curl -X POST http://localhost:8000/ingest \
-  -H "Content-Type: application/json" \
-  -H "x-api-key: ${RAG_API_KEY}" \
-  -d '{"source_id":"guide-1","content":"RAG combines retrieval with generation.","chunking_strategy":"smart"}'
-```
-
-### 6) Query
-
-```bash
-curl -X POST http://localhost:8000/query \
-  -H "Content-Type: application/json" \
-  -H "x-api-key: ${RAG_API_KEY}" \
-  -d '{"question":"What is RAG?","top_k":3,"retrieval":"hybrid","embedding_provider":"local","reranker":"term_overlap","candidate_pool_size":8}'
-```
-
-### Semantic query
-
-```bash
-curl -X POST http://localhost:8000/query/semantic \
-  -H "Content-Type: application/json" \
-  -H "x-api-key: ${RAG_API_KEY}" \
-  -d '{"question":"What is RAG?","top_k":3,"embedding_provider":"sentence_transformers","embedding_model":"sentence-transformers/all-MiniLM-L6-v2"}'
-```
-
-Local TF-IDF alternative:
-
-```bash
-curl -X POST http://localhost:8000/query/semantic \
-  -H "Content-Type: application/json" \
-  -H "x-api-key: ${RAG_API_KEY}" \
-  -d '{"question":"How can embeddings be generated?","top_k":3,"embedding_provider":"local_tfidf","local_dimensions":64}'
-```
-
-### 6a) Run retrieval evals
-
-```bash
-curl -X POST http://localhost:8000/evals/run \
-  -H "Content-Type: application/json" \
-  -H "x-api-key: ${RAG_API_KEY}" \
-  -d '{"cases":[{"question":"What is RAG?","expected_source_ids":["guide-1"],"retrieval":"hybrid","embedding_provider":"local","reranker":"term_overlap"}]}'
-```
-
-### 7) Optional: tests
-
-```bash
-pytest
+rag-knowledge-assistant
+│
+├── src/
+├── ui/
+├── tests/
+├── docs/
+├── render.yaml
+├── vercel.json
+├── README.md
+└── LICENSE
 ```
 
 ---
 
-## API reference
+# 🔎 API
 
-- `GET /health` — service health and runtime summary
-- `GET /ready` — readiness probe (checks storage availability when persistence is enabled)
-- `GET /stats` — index stats and provider/runtime metadata
-- `GET /metrics` — in-memory request metrics
-- `POST /ingest` — ingest one document
-- `POST /ingest/bulk` — ingest many documents
-- `POST /query` — retrieve top-k relevant chunks
-- `POST /query/semantic` — semantic-only query endpoint
-- `POST /evals/run` — run retrieval eval cases against indexed content
-- `DELETE /documents/{source_id}` — remove all chunks for a source
-- `DELETE /clear` — clear index
-
-Docs UI: `http://localhost:8000/docs`
+| Method | Endpoint |
+|---------|----------|
+| GET | /health |
+| GET | /ready |
+| GET | /metrics |
+| POST | /ingest |
+| POST | /query |
+| POST | /query/semantic |
+| POST | /evals/run |
+| DELETE | /documents/{source_id} |
 
 ---
 
-## Persistence notes
+# 🔐 Environment Variables
 
-- In-memory mode remains the default for quick experiments.
-- Set `RAG_STORAGE_PATH` to enable persistent index writes and reload on restart.
-- Current persistence format is a local JSON snapshot of chunks and metadata.
-
----
-
-## Deployment
-
-- Backend: Render (from `render.yaml`)
-  - Render keeps the existing `rag-knowledge-assistant-api` config in this repo.
-  - The service uses Docker and exposes:
-    - `GET /health`
-    - `GET /healthz`
-  - Set these env vars in Render:
-    - `RAG_HOST=0.0.0.0`
-    - `RAG_STORAGE_PATH=/var/data/rag-index.json`
-    - `RAG_ALLOWED_ORIGINS=https://<YOUR_VERCEL_FRONTEND>`
-    - `RAG_API_KEY` (optional, use Sync: false)
-  - Verify backend health after deploy: `curl https://<backend>/health`
-
-- Frontend: Vercel (from `vercel.json`)
-  - Create a new Vercel project and point it at this repository.
-  - Keep `vercel.json` as-is; it publishes files from `ui/` as static assets.
-  - Deploy the project and open:
-    - `https://<frontend>.vercel.app/?api=https://<backend>`
-  - Replace `<backend>` with your Render URL.
-  - The UI writes the URL to browser local storage after first use.
-- CORS note:
-  - Ensure backend `RAG_ALLOWED_ORIGINS` includes your Vercel domain (no trailing slash).
-
-### Quick deploy sanity checks
-
-- Backend health:
-  - `curl https://<backend>/health`
-  - `curl -X POST https://<backend>/query -H "Content-Type: application/json" -d '{"question":"What is RAG?"}'`
-  - A fresh backend with no docs returns `404`.
-- Frontend health check button:
-  - Open UI and click **Check /health** after setting the API base URL.
-- Local smoke check after any deploy:
-  - `curl https://<backend>/health`
-  - `curl -X POST https://<backend>/query -H "Content-Type: application/json" -d '{"question":"What is RAG?"}'`
-- If UI says “Set API base URL first”, open it with `?api=https://<backend>`.
+```env
+RAG_API_KEY=
+RAG_STORAGE_PATH=
+RAG_HOST=0.0.0.0
+RAG_PORT=8000
+RAG_ALLOWED_ORIGINS=
+```
 
 ---
 
-## Contributing
+# 🐳 Docker
 
-- See `CONTRIBUTING.md`.
-- For planned work, see `ROADMAP.md`.
-- For release history, see `CHANGELOG.md`.
+```bash
+docker compose up --build
+```
 
-## License
+---
 
-This project is MIT-licensed. See [LICENSE](LICENSE).
+# ☁ Deployment
+
+## Render
+
+- Deploy with Docker
+- Configure environment variables
+- Verify `/health`
+
+## Vercel
+
+- Deploy `ui/`
+- Connect backend URL
+- Configure CORS
+
+---
+
+# 🛣 Roadmap
+
+- Vector DB integrations
+- Streaming responses
+- Multi-user workspaces
+- LLM provider plugins
+- Advanced rerankers
+- Distributed indexing
+
+---
+
+# 🤝 Contributing
+
+1. Fork
+2. Create branch
+3. Commit
+4. Push
+5. Open PR
+
+---
+
+# 📄 License
+
+MIT License
+
+---
+
+<p align="center">
+
+### ⭐ If this project helped you, please leave a star!
+
+Made  by **Ganesh Basani**
+
+</p>
