@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: trustaware-rag-assistant-api
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - key: RAG_HOST
+        value: 0.0.0.0
+      - key: RAG_STORAGE_PATH
+        value: /app/data/rag-index.json
+      - key: RAG_UPLOAD_DIR
+        value: /app/data/uploads
+      - key: RAG_ALLOWED_ORIGINS
+        sync: false
+      - key: RAG_API_KEY
+        sync: false
+      - key: RAG_LLM_API_KEY
+        sync: false
