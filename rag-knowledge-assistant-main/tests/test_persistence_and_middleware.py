@@ -21,7 +21,7 @@ def test_persistence_save_and_reload(tmp_path):
 
     assert storage_path.exists()
     raw = json.loads(storage_path.read_text(encoding="utf-8"))
-    assert raw["schema_version"] == 1
+    assert raw["schema_version"] == 2
     assert raw["chunks"][0]["source_id"] == "semantic-doc"
 
     reloaded = KnowledgeBase(storage_path=str(storage_path))
@@ -51,7 +51,7 @@ def test_persistence_invalid_file_raises(tmp_path):
 @pytest.fixture
 def api_with_api_key_and_rate_limit(monkeypatch):
     monkeypatch.setenv("RAG_API_KEY", "dev-token")
-    monkeypatch.setenv("RAG_RATE_LIMIT_REQUESTS", "1")
+    monkeypatch.setenv("RAG_RATE_LIMIT_REQUESTS", "4")
     monkeypatch.setenv("RAG_RATE_LIMIT_WINDOW_SECONDS", "60")
 
     sys.modules.pop("rag_assistant.api", None)
@@ -94,5 +94,11 @@ def test_rate_limit_middleware_blocks_excess_calls(api_with_api_key_and_rate_lim
     assert first.status_code in {404, 200}
 
     second = client.post("/query", json={"question": "What is RAG?"}, headers=headers)
-    assert second.status_code == 429
-    assert second.json()["error_code"] == "rate_limit_exceeded"
+    assert second.status_code in {200, 404}
+    third = client.post("/query", json={"question": "What is RAG?"}, headers=headers)
+    assert third.status_code in {200, 404}
+    fourth = client.post("/query", json={"question": "What is RAG?"}, headers=headers)
+    assert fourth.status_code in {200, 404}
+    fifth = client.post("/query", json={"question": "What is RAG?"}, headers=headers)
+    assert fifth.status_code == 429
+    assert fifth.json()["error_code"] == "rate_limit_exceeded"

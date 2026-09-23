@@ -1,463 +1,105 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>RAG Knowledge Assistant</title>
-    <style>
-      :root {
-        --bg: #0b1020;
-        --panel: #121b33;
-        --panel-soft: #1f2a46;
-        --text: #eff2ff;
-        --muted: #96a2c6;
-        --accent: #7fb8ff;
-        --accent-strong: #62a2f9;
-        --danger: #ff7f7f;
-      }
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TrustAware RAG Knowledge Assistant</title>
+  <style>
+    :root{--bg:#f7f8fa;--panel:#fff;--line:#e5e7eb;--text:#111827;--muted:#6b7280;--brand:#2563eb;--brand2:#1d4ed8;--success:#15803d;--warning:#b45309;--danger:#b91c1c;--soft:#f1f5f9;--shadow:0 10px 30px rgba(15,23,42,.06)}
+    *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+    button,input,textarea,select{font:inherit}.app{max-width:1320px;margin:0 auto;padding:24px}.header{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;margin-bottom:20px}.brand h1{margin:0;font-size:26px;letter-spacing:-.02em}.brand p{margin:5px 0 0;color:var(--muted)}
+    .status{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:999px;padding:7px 12px;background:var(--panel);font-size:13px}.dot{width:8px;height:8px;border-radius:50%;background:#9ca3af}.status.ok .dot{background:var(--success)}.status.err .dot{background:var(--danger)}
+    .toolbar{display:grid;grid-template-columns:1.4fr 1fr auto;gap:10px;margin-bottom:20px}.toolbar input{min-width:0}.control,.primary,.ghost{border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:var(--panel);color:var(--text)}.primary{background:var(--brand);border-color:var(--brand);color:#fff;cursor:pointer;font-weight:600}.primary:hover{background:var(--brand2)}.ghost{cursor:pointer}.control:focus,textarea:focus,input:focus,select:focus{outline:2px solid rgba(37,99,235,.16);border-color:#93c5fd}
+    .layout{display:grid;grid-template-columns:310px minmax(0,1fr);gap:18px}.card{background:var(--panel);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow)}.sidebar{padding:18px}.main{min-width:0}.section-title{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}.section-title h2{font-size:15px;margin:0}.muted{color:var(--muted)}
+    .upload{border:1.5px dashed #cbd5e1;border-radius:12px;padding:16px;text-align:center;background:#fbfdff}.upload input{display:none}.upload-label{display:inline-flex;align-items:center;gap:8px;cursor:pointer;border:1px solid var(--line);border-radius:10px;padding:9px 12px;background:#fff;font-weight:600}.upload small{display:block;color:var(--muted);margin-top:8px}.doc-list{display:grid;gap:8px;margin-top:15px}.doc{border:1px solid var(--line);border-radius:12px;padding:12px}.doc-top{display:flex;justify-content:space-between;gap:10px}.doc-name{font-weight:600;word-break:break-word}.doc-meta{color:var(--muted);font-size:12px;margin-top:4px}.doc-actions{display:flex;gap:6px;margin-top:8px}.mini{font-size:12px;padding:6px 8px;border:1px solid var(--line);background:#fff;border-radius:8px;cursor:pointer}.mini.danger{color:var(--danger)}
+    .chat{display:flex;flex-direction:column;height:640px}.chat-head{padding:18px;border-bottom:1px solid var(--line)}.chat-head h2{margin:0 0 4px;font-size:17px}.chat-head p{margin:0;color:var(--muted)}.messages{flex:1;overflow:auto;padding:20px;display:flex;flex-direction:column;gap:14px;background:#fafafa}.msg{max-width:86%;padding:12px 14px;border-radius:14px;white-space:pre-wrap}.msg.user{align-self:flex-end;background:#e8f0ff}.msg.assistant{align-self:flex-start;background:#fff;border:1px solid var(--line)}.msg small{display:block;color:var(--muted);margin-top:8px}.composer{display:grid;grid-template-columns:1fr auto;gap:10px;padding:14px;border-top:1px solid var(--line)}.composer textarea{resize:none;min-height:62px}.composer button{align-self:end;height:42px}
+    .confidence{display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:600;padding:5px 8px;border-radius:999px;background:var(--soft);margin-top:8px}.confidence.high{color:var(--success);background:#ecfdf3}.confidence.medium{color:var(--warning);background:#fff7ed}.confidence.low{color:var(--danger);background:#fef2f2}.sources{margin-top:12px;display:grid;gap:8px}.source{border:1px solid var(--line);border-radius:10px;padding:10px;background:#fcfcfd}.source b{font-size:12px}.source p{margin:3px 0 0;color:#374151;font-size:12px;max-height:90px;overflow:auto}.warning{margin-top:10px;padding:9px 10px;border-radius:9px;background:#fff7ed;color:#92400e;font-size:12px}.gap{margin-top:8px;padding:9px 10px;border-radius:9px;background:#fef2f2;color:#991b1b;font-size:12px}
+    .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:18px}.stat{padding:13px;border:1px solid var(--line);border-radius:12px;background:var(--panel)}.stat .n{font-size:20px;font-weight:700}.stat .l{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}.settings{display:grid;gap:10px;margin-top:18px}.settings label{font-size:12px;font-weight:600;color:#374151}.settings-row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    .empty{height:100%;display:grid;place-items:center;text-align:center;color:var(--muted);padding:35px}.footer{color:var(--muted);text-align:center;margin:18px 0 4px;font-size:12px}
+    @media(max-width:900px){.layout{grid-template-columns:1fr}.chat{height:620px}.toolbar{grid-template-columns:1fr}.stats{grid-template-columns:repeat(2,1fr)}}
+  </style>
+</head>
+<body>
+<div class="app">
+  <div class="header">
+    <div class="brand"><h1>TrustAware RAG Knowledge Assistant</h1><p>Grounded document Q&A with citations, confidence checks, and knowledge diagnostics.</p></div>
+    <div id="status" class="status"><span class="dot"></span><span>Not connected</span></div>
+  </div>
 
-      * {
-        box-sizing: border-box;
-      }
+  <div class="toolbar">
+    <input id="apiBase" class="control" placeholder="API base URL (e.g. http://127.0.0.1:8000)" />
+    <input id="apiKey" class="control" type="password" placeholder="API key (optional)" />
+    <button class="primary" id="connectBtn">Connect</button>
+  </div>
 
-      body {
-        margin: 0;
-        font-family: "Trebuchet MS", "Gill Sans", "Segoe UI", Arial, sans-serif;
-        color: var(--text);
-        background: radial-gradient(circle at top, #1b2647 0%, var(--bg) 55%, #05070f 100%);
-        min-height: 100vh;
-      }
+  <div class="layout">
+    <aside class="card sidebar">
+      <div class="section-title"><h2>Knowledge base</h2><button class="mini" id="refreshBtn">Refresh</button></div>
+      <div class="upload">
+        <label class="upload-label" for="fileInput">＋ Upload document</label>
+        <input id="fileInput" type="file" accept=".pdf,.txt,.md,.markdown,.docx" />
+        <small>PDF, DOCX, TXT, Markdown</small>
+      </div>
+      <div id="docs" class="doc-list"></div>
 
-      header {
-        padding: 1.5rem;
-        border-bottom: 1px solid #263457;
-        background: rgba(7, 10, 20, 0.7);
-        position: sticky;
-        top: 0;
-        backdrop-filter: blur(4px);
-      }
+      <div class="settings">
+        <div class="section-title"><h2>Search settings</h2></div>
+        <div class="settings-row">
+          <div><label>Retrieval</label><select id="retrieval" class="control"><option value="hybrid">Hybrid</option><option value="tfidf">Keyword</option><option value="semantic">Semantic</option></select></div>
+          <div><label>Top K</label><input id="topK" class="control" type="number" min="1" max="10" value="5" /></div>
+        </div>
+        <div class="settings-row">
+          <div><label>Reranker</label><select id="reranker" class="control"><option value="term_overlap">Term overlap</option><option value="none">None</option></select></div>
+          <div><label>Embedder</label><select id="embedder" class="control"><option value="local_tfidf">Local TF-IDF</option><option value="local">Local Hash</option><option value="sentence_transformers">Sentence Transformers</option></select></div>
+        </div>
+      </div>
+    </aside>
 
-      header h1 {
-        margin: 0;
-        font-size: 1.6rem;
-      }
-
-      .subtitle {
-        margin-top: 0.35rem;
-        color: var(--muted);
-      }
-
-      .footer {
-        max-width: 980px;
-        margin: 0 auto 1.5rem;
-        padding: 0 1rem 1rem;
-        text-align: center;
-        color: var(--muted);
-        font-size: 0.92rem;
-      }
-
-      main {
-        max-width: 980px;
-        margin: 0 auto;
-        padding: 1rem;
-      }
-
-      .grid {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 1rem;
-      }
-
-      .card {
-        background: var(--panel);
-        border: 1px solid #27335b;
-        border-radius: 8px;
-        padding: 1rem;
-        margin-bottom: 1rem;
-      }
-
-      .card h2 {
-        margin-top: 0;
-      }
-
-      label {
-        display: block;
-        margin: 0.65rem 0 0.2rem;
-        color: #d3dcff;
-        font-size: 0.95rem;
-      }
-
-      input,
-      textarea,
-      select,
-      button {
-        width: 100%;
-        border-radius: 6px;
-        border: 1px solid #32406d;
-        background: #0a1024;
-        color: var(--text);
-        padding: 0.55rem;
-        margin-bottom: 0.6rem;
-        font-size: 0.95rem;
-      }
-
-      textarea {
-        min-height: 150px;
-        resize: vertical;
-      }
-
-      button {
-        background: var(--accent);
-        border-color: var(--accent);
-        color: #09122a;
-        font-weight: 600;
-        cursor: pointer;
-      }
-
-      button:hover {
-        background: var(--accent-strong);
-      }
-
-      button.secondary {
-        background: #24345f;
-        color: var(--text);
-      }
-
-      #semantic-fields {
-        border-top: 1px dashed #3b4b79;
-        margin-top: 0.6rem;
-        padding-top: 0.6rem;
-      }
-
-      .hidden {
-        display: none;
-      }
-
-      .status {
-        padding: 0.6rem 0.8rem;
-        border-radius: 6px;
-        margin-top: 0.75rem;
-      }
-
-      .status.ok {
-        background: #17381f;
-        border: 1px solid #2a8a36;
-      }
-
-      .status.err {
-        background: #431c2b;
-        border: 1px solid #8a2f42;
-      }
-
-      pre {
-        margin: 0;
-        white-space: pre-wrap;
-        word-break: break-word;
-        background: #090f21;
-        border: 1px solid #27335b;
-        border-radius: 8px;
-        padding: 0.8rem;
-        min-height: 180px;
-        font-size: 0.88rem;
-      }
-
-      @media (max-width: 900px) {
-        .grid {
-          grid-template-columns: 1fr;
-        }
-      }
-    </style>
-  </head>
-  <body>
-    <header>
-      <h1>RAG Knowledge Assistant</h1>
-      <div class="subtitle">Simple browser UI for ingest and query operations</div>
-    </header>
-
-    <main>
-      <section class="card">
-        <h2>Connection</h2>
-        <label for="api-base">API base URL</label>
-        <input id="api-base" placeholder="https://<your-backend-host>" value="" />
-
-        <label for="api-key">API key (optional)</label>
-        <input id="api-key" type="text" placeholder="x-api-key header value" />
-
-        <div id="connection-status" class="status ok">Ready</div>
-        <button id="check-health" class="secondary" type="button">Check /health</button>
+    <main class="main">
+      <section class="card chat">
+        <div class="chat-head"><h2>Ask your knowledge base</h2><p>Answers are generated only when the retrieved evidence is strong enough.</p></div>
+        <div id="messages" class="messages">
+          <div class="empty"><div><strong>Start by uploading a document.</strong><br/>Then ask a question and inspect the cited evidence.</div></div>
+        </div>
+        <div class="composer"><textarea id="question" placeholder="Ask a question about your uploaded documents..."></textarea><button class="primary" id="askBtn">Ask</button></div>
       </section>
 
-      <div class="grid">
-        <section class="card">
-          <h2>Ingest document</h2>
-          <form id="ingest-form">
-            <label for="source-id">Source ID</label>
-            <input id="source-id" placeholder="example-doc" required />
-
-            <label for="chunk-size">Chunk size</label>
-            <input id="chunk-size" type="number" min="64" max="4000" value="800" />
-
-            <label for="chunk-overlap">Chunk overlap</label>
-            <input id="chunk-overlap" type="number" min="0" max="3000" value="120" />
-
-            <label for="metadata">Metadata JSON (optional)</label>
-            <textarea id="metadata" placeholder='{"author":"you","topic":"notes"}'></textarea>
-
-            <label for="content">Content</label>
-            <textarea id="content" required placeholder="Paste content to index..."></textarea>
-
-            <button type="submit">Ingest</button>
-          </form>
-        </section>
-
-        <section class="card">
-          <h2>Query</h2>
-          <form id="query-form">
-            <label for="question">Question</label>
-            <textarea id="question" required placeholder="What do you want to know?"></textarea>
-
-            <label for="top-k">Top k</label>
-            <input id="top-k" type="number" min="1" max="20" value="5" />
-
-            <label for="min-score">Min score</label>
-            <input id="min-score" type="number" min="0" max="1" step="0.01" value="0.0" />
-
-            <label for="retrieval">Retrieval</label>
-            <select id="retrieval">
-              <option value="tfidf">TF-IDF</option>
-              <option value="semantic">Semantic</option>
-            </select>
-
-            <div id="semantic-fields" class="hidden">
-              <label for="embedding-provider">Embedding provider</label>
-              <select id="embedding-provider">
-                <option value="sentence_transformers">sentence_transformers</option>
-                <option value="local">local</option>
-                <option value="local_hash">local_hash</option>
-                <option value="local_tfidf">local_tfidf</option>
-                <option value="onnx_local">onnx_local</option>
-              </select>
-
-              <label for="embedding-model">Embedding model (optional)</label>
-              <input id="embedding-model" value="sentence-transformers/all-MiniLM-L6-v2" />
-
-              <label for="local-dimensions">Local dimensions (optional)</label>
-              <input id="local-dimensions" type="number" min="8" max="4096" value="256" />
-            </div>
-
-            <button type="submit">Search</button>
-          </form>
-        </section>
-      </div>
-
-      <section class="card">
-        <h2>Response</h2>
-        <button id="clear-output" class="secondary" type="button">Clear output</button>
-        <pre id="output">// Results will appear here</pre>
+      <section class="stats">
+        <div class="stat"><div class="n" id="statDocs">—</div><div class="l">Documents</div></div>
+        <div class="stat"><div class="n" id="statChunks">—</div><div class="l">Indexed chunks</div></div>
+        <div class="stat"><div class="n" id="statProvider">—</div><div class="l">Embedder</div></div>
+        <div class="stat"><div class="n" id="statLLM">—</div><div class="l">Answer mode</div></div>
       </section>
     </main>
+  </div>
+  <div class="footer">Built by Ganesh Basani · FastAPI · RAG · Hybrid Retrieval · Grounded Generation</div>
+</div>
 
-    <footer class="footer">Made by Ganesh Basani</footer>
+<script>
+const $ = (id) => document.getElementById(id);
+const state = { api: localStorage.getItem('rag_api_base') || (location.hostname === 'localhost' || location.hostname === '127.0.0.1' ? location.origin : ''), key: localStorage.getItem('rag_api_key') || '' };
+$('apiBase').value = state.api;
+$('apiKey').value = state.key;
 
-    <script>
-      const output = document.getElementById("output");
-      const statusEl = document.getElementById("connection-status");
-      const apiBaseInput = document.getElementById("api-base");
-      const apiKeyInput = document.getElementById("api-key");
-      const retrievalSelect = document.getElementById("retrieval");
-      const semanticFields = document.getElementById("semantic-fields");
-      const API_BASE_STORAGE_KEY = "rag_assistant_api_base";
+function headers(json=false){ const h={}; if(json) h['Content-Type']='application/json'; if($('apiKey').value.trim()) h['x-api-key']=$('apiKey').value.trim(); return h; }
+function api(){ const v=$('apiBase').value.trim().replace(/\/$/,''); if(!v) throw Error('Set an API base URL first.'); return v; }
+function setStatus(text, ok){ $('status').className='status '+(ok?'ok':'err'); $('status').innerHTML='<span class="dot"></span><span>'+escapeHtml(text)+'</span>'; }
+function escapeHtml(s){return String(s).replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));}
+async function call(path, opts={}){ const r=await fetch(api()+path,{...opts,headers:{...headers(Boolean(opts.body)),...(opts.headers||{})}}); const text=await r.text(); let data={}; try{data=text?JSON.parse(text):{}}catch{data={message:text}} if(!r.ok) throw Error(data.message||'Request failed'); return data; }
 
-      function initApiBase() {
-        const queryBase = new URLSearchParams(window.location.search).get("api");
-        const storedBase = localStorage.getItem(API_BASE_STORAGE_KEY);
+async function connect(){ try{ const h=await call('/health'); localStorage.setItem('rag_api_base',$('apiBase').value.trim()); localStorage.setItem('rag_api_key',$('apiKey').value.trim()); setStatus('Connected · '+h.service,true); $('statProvider').textContent=h?.storage?'Ready':'—'; await refresh(); }catch(e){setStatus(e.message,false)} }
 
-        if (queryBase) {
-          apiBaseInput.value = queryBase.trim().replace(/\/$/, "");
-          localStorage.setItem(API_BASE_STORAGE_KEY, apiBaseInput.value);
-          return;
-        }
+async function refresh(){ try{ const [docs,stats,health]=await Promise.all([call('/documents'),call('/stats'),call('/health')]); renderDocs(docs.documents||[]); $('statDocs').textContent=stats.documents ?? 0; $('statChunks').textContent=stats.chunks ?? 0; $('statProvider').textContent=stats.embedding_provider ? String(stats.embedding_provider).split('_')[0] : 'On demand'; $('statLLM').textContent=health.llm_enabled ? 'LLM' : 'Extractive'; }catch(e){setStatus(e.message,false)} }
+function renderDocs(items){ const el=$('docs'); if(!items.length){el.innerHTML='<div class="muted" style="padding:12px 2px">No documents indexed yet.</div>';return;} el.innerHTML=items.map(d=>`<div class="doc"><div class="doc-top"><div><div class="doc-name">${escapeHtml(d.filename||d.source_id)}</div><div class="doc-meta">${d.chunks} chunks · ${escapeHtml(d.file_type||'text')}</div></div></div><div class="doc-actions"><button class="mini danger" data-delete="${encodeURIComponent(d.source_id)}">Delete</button></div></div>`).join(''); el.querySelectorAll('[data-delete]').forEach(btn=>btn.addEventListener('click',async()=>{ if(!confirm('Delete this document?')) return; try{await call('/documents/'+btn.dataset.delete,{method:'DELETE'}); await refresh();}catch(e){setStatus(e.message,false)}})); }
 
-        if (storedBase) {
-          apiBaseInput.value = storedBase.replace(/\/$/, "");
-          return;
-        }
-
-        if (["localhost", "127.0.0.1"].includes(window.location.hostname)) {
-          apiBaseInput.value = "http://127.0.0.1:8000";
-        }
-      }
-
-      function setConnectionStatus(text, ok = true) {
-        statusEl.textContent = text;
-        statusEl.className = `status ${ok ? "ok" : "err"}`;
-      }
-
-      function apiBase() {
-        const value = apiBaseInput.value.trim().replace(/\/$/, "");
-        if (!value) {
-          throw new Error("Set API base URL first (for example https://your-backend-url)");
-        }
-        return value;
-      }
-
-      apiBaseInput.addEventListener("change", () => {
-        localStorage.setItem(API_BASE_STORAGE_KEY, apiBaseInput.value.trim().replace(/\/$/, ""));
-      });
-
-      function apiHeaders() {
-        const headers = {
-          "Content-Type": "application/json",
-        };
-        if (apiKeyInput.value.trim()) {
-          headers["x-api-key"] = apiKeyInput.value.trim();
-        }
-        return headers;
-      }
-
-      function setOutput(data) {
-        output.textContent = JSON.stringify(data, null, 2);
-      }
-
-      async function callApi(path, method, payload = null) {
-        const url = `${apiBase()}${path}`;
-        const controller = new AbortController();
-        const timeoutId = window.setTimeout(() => controller.abort(), 8000);
-        const options = {
-          method,
-          headers: apiHeaders(),
-          signal: controller.signal,
-        };
-        if (payload) {
-          options.body = JSON.stringify(payload);
-        }
-        try {
-          const response = await fetch(url, options);
-          const raw = await response.text();
-          let parsed = {};
-          try {
-            parsed = raw ? JSON.parse(raw) : {};
-          } catch {
-            parsed = { raw };
-          }
-          if (!response.ok) {
-            throw new Error(parsed.message || parsed.error || JSON.stringify(parsed));
-          }
-          return parsed;
-        } finally {
-          window.clearTimeout(timeoutId);
-        }
-      }
-
-      document.addEventListener("DOMContentLoaded", () => {
-        initApiBase();
-      });
-
-      window.addEventListener("error", (event) => {
-        const err = event?.error;
-        if (err && err.name === "AbortError") {
-          setConnectionStatus("Request timed out (8s). Check API base URL and network.", false);
-        }
-      });
-
-      function parseIntOrDefault(value, fallback) {
-        const number = Number.parseInt(value, 10);
-        return Number.isFinite(number) ? number : fallback;
-      }
-
-      function parseFloatOrDefault(value, fallback) {
-        const number = Number.parseFloat(value);
-        return Number.isFinite(number) ? number : fallback;
-      }
-
-      document.getElementById("check-health").addEventListener("click", async () => {
-        try {
-          setConnectionStatus("Checking health...");
-          const result = await callApi("/health", "GET");
-          setOutput(result);
-          setConnectionStatus(`Connected to ${result.service}`, true);
-        } catch (error) {
-          setConnectionStatus(`Health check failed: ${error.message}`, false);
-        }
-      });
-
-      retrievalSelect.addEventListener("change", () => {
-        semanticFields.classList.toggle("hidden", retrievalSelect.value !== "semantic");
-      });
-
-      document.getElementById("ingest-form").addEventListener("submit", async (event) => {
-        event.preventDefault();
-        setOutput({ status: "Ingesting..." });
-
-        let metadata = {};
-        const metadataText = document.getElementById("metadata").value.trim();
-        if (metadataText) {
-          try {
-            metadata = JSON.parse(metadataText);
-          } catch (error) {
-            setConnectionStatus(`Invalid metadata JSON: ${error.message}`, false);
-            return;
-          }
-        }
-
-        const payload = {
-          source_id: document.getElementById("source-id").value.trim(),
-          content: document.getElementById("content").value.trim(),
-          chunk_size: parseIntOrDefault(document.getElementById("chunk-size").value, 800),
-          chunk_overlap: parseIntOrDefault(document.getElementById("chunk-overlap").value, 120),
-          metadata,
-        };
-
-        try {
-          const result = await callApi("/ingest", "POST", payload);
-          setOutput(result);
-          setConnectionStatus("Ingested successfully");
-        } catch (error) {
-          setConnectionStatus(error.message, false);
-        }
-      });
-
-      document.getElementById("query-form").addEventListener("submit", async (event) => {
-        event.preventDefault();
-        const question = document.getElementById("question").value.trim();
-        const topK = parseIntOrDefault(document.getElementById("top-k").value, 5);
-        const minScore = parseFloatOrDefault(document.getElementById("min-score").value, 0.0);
-
-        let payload = {
-          question,
-          top_k: topK,
-          min_score: minScore,
-        };
-
-        let endpoint = "/query";
-        if (retrievalSelect.value === "semantic") {
-          endpoint = "/query/semantic";
-          payload = {
-            ...payload,
-            embedding_provider: document.getElementById("embedding-provider").value,
-            embedding_model: document.getElementById("embedding-model").value.trim() || null,
-            local_dimensions: parseIntOrDefault(document.getElementById("local-dimensions").value, 256),
-          };
-        } else {
-          payload = {
-            ...payload,
-            retrieval: "tfidf",
-          };
-        }
-
-        setOutput({ status: "Querying..." });
-        try {
-          const result = await callApi(endpoint, "POST", payload);
-          setOutput(result);
-          setConnectionStatus(`Found ${result.count} chunk(s)`);
-        } catch (error) {
-          setConnectionStatus(error.message, false);
-        }
-      });
-
-      document.getElementById("clear-output").addEventListener("click", () => {
-        setOutput({});
-      });
-    </script>
-  </body>
+$('connectBtn').addEventListener('click',connect); $('refreshBtn').addEventListener('click',refresh);
+$('fileInput').addEventListener('change',async()=>{const file=$('fileInput').files[0]; if(!file)return; try{ setStatus('Uploading '+file.name+'…'); const fd=new FormData(); fd.append('file',file); const r=await fetch(api()+'/ingest/file',{method:'POST',headers:headers(false),body:fd}); const data=await r.json(); if(!r.ok) throw Error(data.message||'Upload failed'); setStatus('Indexed '+file.name,true); $('fileInput').value=''; await refresh(); addMessage('assistant',`Indexed **${file.name}** successfully.\n${data.chunks_indexed} chunks are now searchable.`); }catch(e){setStatus(e.message,false)} });
+function addMessage(role, text, extra=''){ const empty=$('messages').querySelector('.empty'); if(empty) empty.remove(); const div=document.createElement('div'); div.className='msg '+role; div.innerHTML='<div>'+escapeHtml(text).replace(/\n/g,'<br/>')+'</div>'+extra; $('messages').appendChild(div); $('messages').scrollTop=$('messages').scrollHeight; return div; }
+function confidenceBadge(n){ const cls=n>=.72?'high':n>=.45?'medium':'low'; return `<div class="confidence ${cls}">${Math.round(n*100)}% evidence confidence</div>`; }
+function renderSources(data){ if(!data.citations?.length) return ''; let html='<div class="sources"><b>Sources</b>'; data.citations.forEach((c,i)=>{ const ctx=data.context?.[i]; html+=`<div class="source"><b>[${c.citation_id}] ${escapeHtml(c.label)}</b><p>${escapeHtml(ctx?.text||'')}</p></div>`; }); return html+'</div>'; }
+async function ask(){ const q=$('question').value.trim(); if(!q)return; $('question').value=''; addMessage('user',q); const pending=addMessage('assistant','Searching the knowledge base…'); try{ const payload={question:q,top_k:Number($('topK').value)||5,retrieval:$('retrieval').value,reranker:$('reranker').value,embedding_provider:$('embedder').value,generate:true}; const data=await call('/query',{method:'POST',body:JSON.stringify(payload)}); pending.remove(); let extra=confidenceBadge(data.confidence||0)+renderSources(data); if(data.knowledge_gap) extra+=`<div class="gap">${(data.warnings||[]).map(escapeHtml).join('<br/>')}</div>`; else if(data.warnings?.length) extra+=`<div class="warning">${data.warnings.map(escapeHtml).join('<br/>')}</div>`; addMessage('assistant',data.answer,extra); }catch(e){ pending.remove(); addMessage('assistant','The request could not be completed: '+e.message); setStatus(e.message,false); } }
+$('askBtn').addEventListener('click',ask); $('question').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();ask();}});
+if(state.api) connect();
+</script>
+</body>
 </html>

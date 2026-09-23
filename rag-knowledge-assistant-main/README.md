@@ -1,208 +1,182 @@
+# TrustAware RAG Knowledge Assistant
 
-#  RAG Knowledge Assistant
-<p align="center">
-  <img src="https://readme-typing-svg.demolab.com?font=Fira+Code&size=28&pause=1000&center=true&vCenter=true&width=900&lines=AI-Powered+RAG+Knowledge+Assistant;Hybrid+Search+%7C+Semantic+Retrieval;FastAPI+%7C+Vector+Ready+%7C+Production+Ready;+by+Ganesh+Basani" alt="Typing SVG" />
-</p>
+A production-style RAG application for document-grounded Q&A. Users upload documents, ask questions, and receive evidence-backed answers with source citations, confidence checks, and diagnostics for missing, stale, or potentially conflicting information.
 
-<p align="center">
-<img src="https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python"/>
-<img src="https://img.shields.io/badge/FastAPI-Production-009688?style=for-the-badge&logo=fastapi"/>
-<img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge"/>
-<img src="https://img.shields.io/badge/RAG-Hybrid%20Retrieval-blueviolet?style=for-the-badge"/>
-</p>
+## Core capabilities
 
----
+- PDF, DOCX, TXT, and Markdown ingestion
+- Smart chunking with configurable size and overlap
+- Keyword, semantic, and hybrid retrieval
+- Reciprocal Rank Fusion (RRF)
+- Lightweight reranking
+- Grounded LLM generation through an OpenAI-compatible endpoint
+- Safe extractive fallback when no LLM key is configured
+- Inline source citations and retrieved evidence
+- Confidence-aware no-answer / knowledge-gap handling
+- Potential outdated-source and conflicting-information warnings
+- Idempotent source replacement and document listing
+- Metadata filtering
+- API-key authentication and IP-based rate limiting
+- Request IDs, health/readiness checks, runtime metrics, and safe errors
+- Dockerized deployment with non-root container and health check
+- Responsive light UI
+- Retrieval evaluation harness
 
-## ✨ Overview
-
-RAG Knowledge Assistant is a production-ready Retrieval-Augmented Generation backend designed for scalable document intelligence.
-
-It combines lexical search, semantic embeddings, hybrid retrieval, reranking, evaluation tools, persistent storage, observability, and secure APIs into one developer-friendly platform.
-
----
-
-# 🌟 Highlights
-
-- Smart Document Chunking
-- Hybrid Retrieval
-- TF-IDF + Semantic Search
-- Reciprocal Rank Fusion
-- Query Tracing
-- Evaluation Harness
-- API Key Authentication
-- Rate Limiting
-- Docker Ready
-- Render + Vercel Deployment
-- Metrics & Health Checks
-
----
-
-# 🏗 Architecture
+## Architecture
 
 ```text
-                User
-                  │
-          FastAPI REST API
-                  │
-      ┌───────────┴────────────┐
-      │                        │
-Document Ingestion       Query Engine
-      │                        │
- Smart Chunking        Hybrid Retrieval
-      │                        │
- TF-IDF + Embeddings + Reranker
-                  │
-          Ranked Context
-                  │
-             Final Response
+                        Web UI
+                           |
+                           v
+                       FastAPI API
+                           |
+         +-----------------+-----------------+
+         |                 |                 |
+         v                 v                 v
+  Document Pipeline   Retrieval Engine   Evaluation
+         |                 |
+  PDF/DOCX/TXT/MD     TF-IDF + Semantic
+         |                 |
+      Chunking              RRF
+         |                 |
+     Embeddings          Reranking
+         |                 |
+         +-----------+-----+
+                     v
+               Evidence Gate
+                 /       \
+             enough     weak/none
+                |           |
+                v           v
+               LLM      Knowledge Gap
+                |
+                v
+        Grounded Answer
+          + Citations
 ```
 
----
-
-# ⚡ Features
-
-| Feature | Description |
-|----------|-------------|
-| Smart Chunking | Token, Sentence, Paragraph & AI-aware |
-| Hybrid Retrieval | TF-IDF + Semantic |
-| Semantic Providers | sentence-transformers, local, ONNX |
-| Query Trace | Debug retrieval pipeline |
-| Evaluation | Offline benchmarking |
-| Security | API Keys + Validation |
-| Monitoring | Metrics + Health endpoints |
-| Deployment | Docker, Render, Vercel |
-
----
-
-# 🚀 Quick Start
+## Quick start
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/rag-knowledge-assistant.git
-
-cd rag-knowledge-assistant
-
 python -m venv .venv
-
-source .venv/bin/activate
+# Windows
+.venv\\Scripts\\activate
+# macOS/Linux
+# source .venv/bin/activate
 
 pip install -e ".[dev]"
+copy .env.example .env
+
+rag-knowledge-assistant
 ```
 
-Run
+Or:
 
 ```bash
-cp .env.example .env
-
 uvicorn rag_assistant.api:app --reload --app-dir src
 ```
 
-Open
+Open `http://127.0.0.1:8000/ui/`.
 
-```
-http://localhost:8000/docs
-```
-
----
-
-# 📂 Project Structure
-
-```text
-rag-knowledge-assistant
-│
-├── src/
-├── ui/
-├── tests/
-├── docs/
-├── render.yaml
-├── vercel.json
-├── README.md
-└── LICENSE
-```
-
----
-
-# 🔎 API
-
-| Method | Endpoint |
-|---------|----------|
-| GET | /health |
-| GET | /ready |
-| GET | /metrics |
-| POST | /ingest |
-| POST | /query |
-| POST | /query/semantic |
-| POST | /evals/run |
-| DELETE | /documents/{source_id} |
-
----
-
-# 🔐 Environment Variables
-
-```env
-RAG_API_KEY=
-RAG_STORAGE_PATH=
-RAG_HOST=0.0.0.0
-RAG_PORT=8000
-RAG_ALLOWED_ORIGINS=
-```
-
----
-
-# 🐳 Docker
+## Enable stronger semantic embeddings
 
 ```bash
+pip install -e ".[embeddings]"
+```
+
+Then choose `sentence_transformers` as the embedding provider and configure `RAG_DEFAULT_EMBEDDING_MODEL` as needed.
+
+## Enable LLM generation
+
+Without an external key, the app uses a deterministic extractive answerer so the project remains runnable.
+
+For an OpenAI-compatible provider:
+
+```env
+RAG_LLM_PROVIDER=openai_compatible
+RAG_LLM_API_KEY=your-key
+RAG_LLM_MODEL=gpt-4o-mini
+RAG_LLM_BASE_URL=https://api.openai.com/v1/chat/completions
+```
+
+You may point `RAG_LLM_BASE_URL` to another compatible provider.
+
+## Example query
+
+```json
+{
+  "question": "What is the remote work policy?",
+  "retrieval": "hybrid",
+  "embedding_provider": "local_tfidf",
+  "reranker": "term_overlap",
+  "top_k": 5,
+  "generate": true
+}
+```
+
+The response includes `answer`, `grounded`, `confidence`, `knowledge_gap`, `citations`, `warnings`, `context`, `generation`, and `trace`.
+
+## API
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| GET | `/health` | Liveness |
+| GET | `/ready` | Readiness / storage probe |
+| GET | `/stats` | Index statistics |
+| GET | `/documents` | List documents |
+| POST | `/ingest` | Ingest raw text |
+| POST | `/ingest/file` | Upload PDF/DOCX/TXT/MD |
+| POST | `/ingest/bulk` | Bulk ingestion |
+| POST | `/query` | Grounded query |
+| POST | `/query/semantic` | Semantic-only query |
+| DELETE | `/documents/{source_id}` | Delete a source |
+| DELETE | `/clear` | Clear index |
+| POST | `/evals/run` | Retrieval evaluation |
+| GET | `/metrics` | Runtime metrics |
+
+## Docker
+
+```bash
+copy .env.example .env
 docker compose up --build
 ```
 
----
+The Docker image installs semantic dependencies, runs as a non-root user, and exposes a health check.
 
-# ☁ Deployment
+## Evaluation
 
-## Render
+Use a small curated set of representative questions and measure retrieval hit rate, MRR, no-answer accuracy, citation correctness, answer faithfulness/relevance, and response latency. The included evaluation endpoint focuses on retrieval metrics; generation-quality metrics can be layered on top of the returned evidence.
 
-- Deploy with Docker
-- Configure environment variables
-- Verify `/health`
+## Project structure
 
-## Vercel
+```text
+rag-knowledge-assistant/
+├── src/rag_assistant/
+│   ├── api.py
+│   ├── config.py
+│   ├── document_processor.py
+│   ├── embeddings.py
+│   ├── evals.py
+│   ├── knowledge_base.py
+│   ├── llm.py
+│   └── models.py
+├── ui/index.html
+├── tests/
+├── Dockerfile
+├── docker-compose.yml
+├── render.yaml
+├── .env.example
+└── README.md
+```
 
-- Deploy `ui/`
-- Connect backend URL
-- Configure CORS
+## Resume-ready project summary
 
----
+> Built a trust-aware RAG knowledge assistant using Python and FastAPI with document ingestion, hybrid keyword + semantic retrieval, reranking, grounded LLM responses, source citations, confidence-aware no-answer handling, knowledge diagnostics, Docker deployment, and automated retrieval evaluation.
 
-# 🛣 Roadmap
+## Important scope note
 
-- Vector DB integrations
-- Streaming responses
-- Multi-user workspaces
-- LLM provider plugins
-- Advanced rerankers
-- Distributed indexing
+This release is designed as a **strong production-style portfolio implementation**. The default persistence engine is still a local JSON index, which is suitable for a small deployment and demonstration. For horizontal multi-worker scale, move the index to a shared database/vector store such as PostgreSQL + pgvector or a managed vector database.
 
----
+## License
 
-# 🤝 Contributing
-
-1. Fork
-2. Create branch
-3. Commit
-4. Push
-5. Open PR
-
----
-
-# 📄 License
-
-MIT License
-
----
-
-<p align="center">
-
-### ⭐ If this project helped you, please leave a star!
-
-Made  by **Ganesh Basani**
-
-</p>
+MIT

@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: rag-knowledge-assistant-api
+    name: trustaware-rag-assistant-api
     plan: starter
     env: docker
     dockerfilePath: ./Dockerfile
@@ -9,8 +9,12 @@ services:
       - key: RAG_HOST
         value: 0.0.0.0
       - key: RAG_STORAGE_PATH
-        value: /var/data/rag-index.json
+        value: /app/data/rag-index.json
+      - key: RAG_UPLOAD_DIR
+        value: /app/data/uploads
       - key: RAG_ALLOWED_ORIGINS
-        value: https://<YOUR_VERCEL_FRONTEND_ORIGIN>
+        sync: false
       - key: RAG_API_KEY
+        sync: false
+      - key: RAG_LLM_API_KEY
         sync: false
