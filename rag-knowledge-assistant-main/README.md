@@ -22,6 +22,7 @@ A production-style RAG application for document-grounded Q&A. Users upload docum
 - Responsive chat UI with local conversation history and keyboard shortcuts
 - Chat search, rename/delete, Markdown export, and stop-generation controls
 - Per-file indexing status, document-type filters, and one-click source excerpt copying
+- Composer actions for file upload, pasted-text ingestion, retrieval-mode selection, and opt-in browser voice typing
 - Retrieval evaluation harness
 
 ## Architecture
