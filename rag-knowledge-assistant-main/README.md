@@ -9,7 +9,7 @@ A production-style RAG application for document-grounded Q&A. Users upload docum
 - Keyword, semantic, and hybrid retrieval
 - Reciprocal Rank Fusion (RRF)
 - Lightweight reranking
-- Grounded LLM generation through an OpenAI-compatible endpoint
+- Grounded LLM generation through Gemini or an OpenAI-compatible endpoint
 - Safe extractive fallback when no LLM key is configured
 - Inline source citations and retrieved evidence
 - Confidence-aware no-answer / knowledge-gap handling
@@ -19,7 +19,9 @@ A production-style RAG application for document-grounded Q&A. Users upload docum
 - API-key authentication and IP-based rate limiting
 - Request IDs, health/readiness checks, runtime metrics, and safe errors
 - Dockerized deployment with non-root container and health check
-- Responsive light UI
+- Responsive chat UI with local conversation history and keyboard shortcuts
+- Chat search, rename/delete, Markdown export, and stop-generation controls
+- Per-file indexing status, document-type filters, and one-click source excerpt copying
 - Retrieval evaluation harness
 
 ## Architecture
