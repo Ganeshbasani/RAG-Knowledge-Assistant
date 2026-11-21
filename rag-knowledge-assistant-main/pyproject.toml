@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rag-knowledge-assistant"
-version = "1.0.0"
+version = "1.4.1"
 description = "Trust-aware RAG knowledge assistant with hybrid retrieval, grounded generation, citations, and document diagnostics."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -19,13 +19,18 @@ dependencies = [
   "python-dotenv>=1.0",
   "pypdf>=5.0",
   "python-docx>=1.1",
+  "sqlalchemy>=2.0",
+  "PyJWT>=2.8",
+  "openpyxl>=3.1",
+  "python-pptx>=1.0",
+  "Pillow>=10.0",
+  "rapidocr>=3.10.0",
+  "onnxruntime>=1.17",
 ]
 
 [project.optional-dependencies]
-dev = [
-  "pytest>=8.0",
-  "httpx>=0.27",
-  "ruff>=0.6",
+qdrant = [
+  "qdrant-client>=1.9",
 ]
 embeddings = [
   "numpy>=1.26",
@@ -34,6 +39,11 @@ embeddings = [
 onnx = [
   "onnxruntime>=1.17",
   "transformers>=4.42",
+]
+dev = [
+  "pytest>=8.0",
+  "httpx>=0.27",
+  "ruff==0.17.5",
 ]
 
 [project.urls]
@@ -46,6 +56,22 @@ rag-knowledge-assistant = "rag_assistant.cli:main"
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 addopts = "-q"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "W", "I", "UP", "B", "C4", "RUF", "PIE"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = [
+  "fastapi.Depends",
+  "fastapi.File",
+  "fastapi.Query",
+  "fastapi.Header",
+  "fastapi.Body",
+]
 
 [tool.setuptools]
 package-dir = {"" = "src"}

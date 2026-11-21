@@ -3,8 +3,8 @@ from __future__ import annotations
 import importlib
 import sys
 
-from fastapi.testclient import TestClient
 import pytest
+from fastapi.testclient import TestClient
 
 
 @pytest.fixture

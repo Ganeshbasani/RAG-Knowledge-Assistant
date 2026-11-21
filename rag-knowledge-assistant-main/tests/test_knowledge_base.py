@@ -1,6 +1,7 @@
-from rag_assistant.knowledge_base import KnowledgeBase
 import pytest
+
 from rag_assistant.evals import run_retrieval_eval
+from rag_assistant.knowledge_base import KnowledgeBase
 
 
 def test_ingest_and_query_returns_expected_chunks():

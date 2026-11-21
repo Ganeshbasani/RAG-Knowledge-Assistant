@@ -1,5 +1,13 @@
 # Architecture Notes
 
+## Storage seams
+
+- `KnowledgeBase` is the compatibility seam: routes/tests call `ingest_with_info`,
+  `query_with_trace`, `list_documents`, `stats`, `health`. Internally it delegates:
+  - `VectorStore` (`stores.py`): chunk records + embedding vectors — JSON default,
+    Qdrant opt-in (`RAG_VECTOR_STORE=qdrant`).
+  - `MetadataStore` (`metadata.py`): documents/feedback/audit/eval — SQLite default.
+
 ## Request flow
 
 1. The client uploads a supported document or sends raw text.

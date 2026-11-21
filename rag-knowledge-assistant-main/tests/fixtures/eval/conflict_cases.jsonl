@@ -1,0 +1,2 @@
+{"question": "What is the remote work policy?", "expected_source_ids": ["remote-policy"], "note": "Superseded version: remote work was removed in January 2026; answer only the January version."}
+{"question": "What is the employee onboarding checklist?", "expected_source_ids": ["onboarding-v2"], "note": "Superseded by the v2 onboarding guide effective March 2026."}

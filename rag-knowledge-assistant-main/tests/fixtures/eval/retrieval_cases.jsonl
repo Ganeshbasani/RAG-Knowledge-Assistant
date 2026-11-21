@@ -1,0 +1,10 @@
+{"question": "What is the remote work policy?", "expected_source_ids": ["remote-policy", "policy-docs"]}
+{"question": "How many days per week can employees work from home?", "expected_source_ids": ["remote-policy"]}
+{"question": "What are the quarterly budget approval steps?", "expected_source_ids": ["budget-process"]}
+{"question": "Which team owns the payments gateway?", "expected_source_ids": ["payments-team"]}
+{"question": "How is incident response triggered for a P1 outage?", "expected_source_ids": ["incident-runbook"]}
+{"question": "What is the employee onboarding checklist?", "expected_source_ids": ["onboarding"]}
+{"question": "What is the deployment rollback procedure?", "expected_source_ids": ["deploy-runbook"]}
+{"question": "What is the API rate limit policy?", "expected_source_ids": ["api-policy"]}
+{"question": "How are expenses reimbursed?", "expected_source_ids": ["expense-policy"]}
+{"question": "What is the bug triage process?", "expected_source_ids": ["triage-guide"]}

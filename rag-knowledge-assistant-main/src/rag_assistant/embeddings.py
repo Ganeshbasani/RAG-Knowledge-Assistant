@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import math
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Sequence
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 try:
     import numpy as np  # type: ignore

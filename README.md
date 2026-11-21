@@ -1,11 +1,11 @@
 
-#  RAG Knowledge Assistant
+# RAG Knowledge Assistant
 <p align="center">
   <img src="https://readme-typing-svg.demolab.com?font=Fira+Code&size=28&pause=1000&center=true&vCenter=true&width=900&lines=AI-Powered+RAG+Knowledge+Assistant;Hybrid+Search+%7C+Semantic+Retrieval;FastAPI+%7C+Vector+Ready+%7C+Production+Ready;+by+Ganesh+Basani" alt="Typing SVG" />
 </p>
 
 <p align="center">
-<img src="https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python"/>
+<img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python"/>
 <img src="https://img.shields.io/badge/FastAPI-Production-009688?style=for-the-badge&logo=fastapi"/>
 <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge"/>
 <img src="https://img.shields.io/badge/RAG-Hybrid%20Retrieval-blueviolet?style=for-the-badge"/>
@@ -54,7 +54,7 @@ Document Ingestion       Query Engine
                   │
           Ranked Context
                   │
-             Final Response
+           Final Response
 ```
 
 ---
@@ -64,7 +64,7 @@ Document Ingestion       Query Engine
 | Feature | Description |
 |----------|-------------|
 | Smart Chunking | Token, Sentence, Paragraph & AI-aware |
-| Hybrid Retrieval | TF-IDF + Semantic |
+| Hybrid Retrieval | TF-IDF + Semantic + RRF |
 | Semantic Providers | sentence-transformers, local, ONNX |
 | Query Trace | Debug retrieval pipeline |
 | Evaluation | Offline benchmarking |
@@ -77,9 +77,9 @@ Document Ingestion       Query Engine
 # 🚀 Quick Start
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/rag-knowledge-assistant.git
+git clone https://github.com/Ganeshbasani/RAG-Knowledge-Assistant.git
 
-cd rag-knowledge-assistant
+cd RAG-Knowledge-Assistant/rag-knowledge-assistant-main
 
 python -m venv .venv
 
@@ -98,8 +98,8 @@ uvicorn rag_assistant.api:app --reload --app-dir src
 
 Open
 
-```
-http://localhost:8000/docs
+```bash
+http://localhost:8000/ui/
 ```
 
 ---
@@ -107,16 +107,19 @@ http://localhost:8000/docs
 # 📂 Project Structure
 
 ```text
-rag-knowledge-assistant
-│
-├── src/
-├── ui/
-├── tests/
-├── docs/
-├── render.yaml
-├── vercel.json
+RAG-Knowledge-Assistant/
+├── rag-knowledge-assistant-main/
+│   ├── src/
+│   ├── ui/
+│   ├── tests/
+│   ├── docs/
+│   ├── render.yaml
+│   ├── vercel.json
+│   ├── README.md
+│   └── LICENSE
 ├── README.md
-└── LICENSE
+├── render.yaml
+└── Dockerfile
 ```
 
 ---
@@ -144,6 +147,7 @@ RAG_STORAGE_PATH=
 RAG_HOST=0.0.0.0
 RAG_PORT=8000
 RAG_ALLOWED_ORIGINS=
+RAG_ENV=development
 ```
 
 ---
@@ -162,6 +166,7 @@ docker compose up --build
 
 - Deploy with Docker
 - Configure environment variables
+- Set `RAG_API_KEY` (authentication is off by default; `RAG_ENV=production` refuses to start without it)
 - Verify `/health`
 
 ## Vercel
@@ -175,11 +180,12 @@ docker compose up --build
 # 🛣 Roadmap
 
 - Vector DB integrations
-- Streaming responses
+- Streaming responses (SSE)
 - Multi-user workspaces
-- LLM provider plugins
-- Advanced rerankers
+- LLM provider abstraction (Anthropic, Ollama)
+- Advanced rerankers (cross-encoder)
 - Distributed indexing
+- Query rewriting / multi-query retrieval
 
 ---
 
@@ -203,6 +209,6 @@ MIT License
 
 ### ⭐ If this project helped you, please leave a star!
 
-Made  by **Ganesh Basani**
+Made by **Ganesh Basani**
 
 </p>

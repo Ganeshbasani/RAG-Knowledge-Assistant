@@ -10,8 +10,18 @@ services:
       RAG_UPLOAD_DIR: /app/data/uploads
       RAG_HOST: 0.0.0.0
       RAG_PORT: 8000
+      RAG_VECTOR_STORE: qdrant
+      RAG_QDRANT_URL: http://rag-assistant-qdrant:6333
     volumes:
       - rag_data:/app/data
 
+  rag-assistant-qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+
 volumes:
   rag_data:
+  qdrant_data:

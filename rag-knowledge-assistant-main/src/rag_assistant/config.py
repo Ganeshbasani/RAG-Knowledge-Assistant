@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import os
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Tuple
 
 try:
     from dotenv import load_dotenv
@@ -44,7 +43,7 @@ def _env_bool(name: str, default: bool) -> bool:
     raise ValueError(f"Invalid boolean for {name}: {raw}")
 
 
-def _env_allowed_origins(raw: str | None) -> Tuple[str, ...]:
+def _env_allowed_origins(raw: str | None) -> tuple[str, ...]:
     if not raw:
         return ()
     values = tuple(item.strip() for item in raw.split(","))
@@ -69,11 +68,30 @@ class AppConfig:
     rate_limit_requests: int = 120
     rate_limit_window_seconds: int = 60
     request_body_limit_bytes: int = 10_485_760
-    request_timeout_seconds: int = 30
-    relevance_floor: float = 0.0
+    environment: str = "development"
 
-    llm_provider: str = "extractive"
-    llm_model: str = "gpt-4o-mini"
+    # Storage (Phase 1)
+    vector_store: str = "json"
+    qdrant_url: str | None = None
+    qdrant_api_key: str | None = None
+    qdrant_collection: str = "rag-chunks"
+    db_url: str | None = None
+
+    # Reranking (Phase 1.7)
+    reranker: str = "term_overlap"
+    reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+
+    # Generation (Phase 2.2)
+    llm_max_output_tokens: int | None = None
+
+    # Multi-user auth (Phase 4.1)
+    jwt_secret: str | None = None
+    jwt_token_ttl_seconds: int = 3600
+    jwt_issuer: str = "rag-knowledge-assistant"
+    workspace_default: str = "default"
+
+    llm_provider: str = "gemini"
+    llm_model: str = "gemini-3.7-flash"
     llm_api_key: str | None = None
     llm_base_url: str = "https://api.openai.com/v1/chat/completions"
     llm_timeout_seconds: int = 30
@@ -84,7 +102,14 @@ class AppConfig:
     trust_proxy_headers: bool = False
 
     @classmethod
-    def from_env(cls) -> "AppConfig":
+    def from_env(cls) -> AppConfig:
+        llm_provider = (_env("RAG_LLM_PROVIDER", "gemini") or "gemini").strip().lower()
+        if llm_provider == "gemini":
+            # Keep Google credentials separate so an old OpenAI key is never
+            # accidentally sent to Google's endpoint.
+            llm_api_key = _env("GEMINI_API_KEY")
+        else:
+            llm_api_key = _env("RAG_LLM_API_KEY") or _env("OPENAI_API_KEY")
         return cls(
             service_name=_env("RAG_SERVICE_NAME", "rag-knowledge-assistant"),
             api_key=_env("RAG_API_KEY"),
@@ -99,11 +124,23 @@ class AppConfig:
             rate_limit_requests=_env_int("RAG_RATE_LIMIT_REQUESTS", 120),
             rate_limit_window_seconds=_env_int("RAG_RATE_LIMIT_WINDOW_SECONDS", 60),
             request_body_limit_bytes=_env_int("RAG_MAX_REQUEST_BYTES", 10_485_760),
-            request_timeout_seconds=_env_int("RAG_REQUEST_TIMEOUT_SECONDS", 30),
-            relevance_floor=float(_env("RAG_RELEVANCE_FLOOR", "0.0") or "0.0"),
-            llm_provider=_env("RAG_LLM_PROVIDER", "extractive") or "extractive",
-            llm_model=_env("RAG_LLM_MODEL", "gpt-4o-mini") or "gpt-4o-mini",
-            llm_api_key=_env("RAG_LLM_API_KEY") or _env("OPENAI_API_KEY"),
+            environment=(_env("RAG_ENV", "development") or "development").strip().lower(),
+            vector_store=(_env("RAG_VECTOR_STORE", "json") or "json").strip().lower(),
+            qdrant_url=_env("RAG_QDRANT_URL") or _env("QDRANT_URL"),
+            qdrant_api_key=_env("RAG_QDRANT_API_KEY") or _env("QDRANT_API_KEY"),
+            qdrant_collection=_env("RAG_QDRANT_COLLECTION", "rag-chunks") or "rag-chunks",
+            db_url=_env("RAG_DB_URL"),
+            reranker=(_env("RAG_RERANKER", "term_overlap") or "term_overlap").strip().lower(),
+            reranker_model=_env("RAG_RERANKER_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")
+            or "cross-encoder/ms-marco-MiniLM-L-6-v2",
+            llm_max_output_tokens=(_env_int("RAG_LLM_MAX_OUTPUT_TOKENS", 0) or None),
+            jwt_secret=_env("RAG_JWT_SECRET"),
+            jwt_token_ttl_seconds=_env_int("RAG_JWT_TTL_SECONDS", 3600),
+            jwt_issuer=_env("RAG_JWT_ISSUER", "rag-knowledge-assistant") or "rag-knowledge-assistant",
+            workspace_default=_env("RAG_WORKSPACE_DEFAULT", "default") or "default",
+            llm_provider=llm_provider,
+            llm_model=_env("RAG_LLM_MODEL", "gemini-3.7-flash") or "gemini-3.7-flash",
+            llm_api_key=llm_api_key,
             llm_base_url=_env("RAG_LLM_BASE_URL", "https://api.openai.com/v1/chat/completions") or "https://api.openai.com/v1/chat/completions",
             llm_timeout_seconds=_env_int("RAG_LLM_TIMEOUT_SECONDS", 30),
             log_level=_env("RAG_LOG_LEVEL", "INFO") or "INFO",

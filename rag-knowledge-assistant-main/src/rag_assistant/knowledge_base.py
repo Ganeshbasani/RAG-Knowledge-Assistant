@@ -1,31 +1,42 @@
 from __future__ import annotations
 
-import json
-import math
+import itertools
 import re
-import threading
-from collections import Counter, defaultdict
+from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List
+from threading import RLock
+from typing import Any
 
 from rag_assistant.embeddings import EmbeddingProviderError, ProviderSpec, build_embedding_provider
+from rag_assistant.metadata import DocumentRecord, MetadataStore, create_metadata_store
+from rag_assistant.ranking import BM25Index
+from rag_assistant.rerankers import CrossEncoderReranker
+from rag_assistant.sessions import SessionStore
+from rag_assistant.stores import (
+    STORAGE_SCHEMA_VERSION,
+    JSONVectorStore,
+    VectorStore,
+)
 
-TOKEN_PATTERN = re.compile(r"[a-zA-Z0-9]+")
-SENTENCE_PATTERN = re.compile(r"(?<=[.!?])\s+")
-PARAGRAPH_PATTERN = re.compile(r"\n\s*\n+")
+# Re-exported for backwards compatibility (error types live in stores).
+from rag_assistant.stores import (
+    KnowledgeBaseError as KnowledgeBaseError,
+)
+from rag_assistant.stores import (
+    KnowledgeBaseStorageError as KnowledgeBaseStorageError,
+)
+
+TOKEN_PATTERN = r"[a-zA-Z0-9]+"
+_TOKEN_RE = re.compile(TOKEN_PATTERN)
+SENTENCE_PATTERN = r"(?<=[.!?])\s+"
+PARAGRAPH_PATTERN = r"\n\s*\n+"
+_SENTENCE_RE = re.compile(SENTENCE_PATTERN)
+_PARAGRAPH_RE = re.compile(PARAGRAPH_PATTERN)
 SUPPORTED_CHUNKING_STRATEGIES = {"tokens", "sentence", "paragraph", "smart"}
 SUPPORTED_RETRIEVAL_MODES = {"tfidf", "semantic", "hybrid"}
-SUPPORTED_RERANKERS = {"none", "term_overlap"}
-
-
-class KnowledgeBaseError(RuntimeError):
-    """Base class for knowledge-base runtime failures."""
-
-
-class KnowledgeBaseStorageError(KnowledgeBaseError):
-    """Raised when the persistence layer cannot be loaded or written."""
+SUPPORTED_RERANKERS = {"none", "term_overlap", "cross_encoder"}
 
 
 @dataclass(frozen=True)
@@ -34,13 +45,24 @@ class RetrievedChunk:
     chunk_index: int
     text: str
     score: float
-    metadata: Dict[str, Any]
+    metadata: dict[str, Any]
 
 
 class KnowledgeBase:
-    """Thread-safe document index with lexical, semantic and hybrid retrieval."""
+    """Thread-safe document index with lexical, semantic and hybrid retrieval.
 
-    STORAGE_SCHEMA_VERSION = 2
+    Storage is split into two seams:
+
+    - ``_store`` (:class:`VectorStore`) owns chunk records and embeddings;
+      the default is the zero-dependency JSON backend, Qdrant is opt-in.
+    - ``_metadata_store`` (:class:`MetadataStore`) owns document metadata
+      (SQLite by default, PostgreSQL-ready).
+
+    The public methods (``ingest_with_info``, ``query_with_trace``, ...) are
+    the compatibility seam: they are stable across storage backends.
+    """
+
+    STORAGE_SCHEMA_VERSION = STORAGE_SCHEMA_VERSION
 
     def __init__(
         self,
@@ -48,22 +70,42 @@ class KnowledgeBase:
         chunk_overlap: int = 120,
         storage_path: str | None = None,
         default_embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2",
+        vector_store: VectorStore | None = None,
+        metadata_store: MetadataStore | None = None,
+        reranker: str = "term_overlap",
+        reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2",
+        session_store: SessionStore | None = None,
+        query_rewriter: Callable[[str], list[str]] | None = None,
     ) -> None:
         self._validate_chunk_config(chunk_size, chunk_overlap)
         self._chunk_size = chunk_size
         self._chunk_overlap = chunk_overlap
         self._storage_path = Path(storage_path).expanduser() if storage_path else None
-        self._lock = threading.RLock()
-        self._chunks: List[Dict[str, Any]] = []
-        self._doc_freq: Dict[str, int] = defaultdict(int)
-        self._default_embedding_model = default_embedding_model.strip()
+        self._lock = RLock()
+        self._store = (
+            vector_store if vector_store is not None
+            else JSONVectorStore(str(self._storage_path) if self._storage_path else None)
+        )
+        self._metadata_store = (
+            metadata_store if metadata_store is not None
+            else create_metadata_store(storage_path=str(self._storage_path) if self._storage_path else None)
+        )
+        self._default_embedding_model = (default_embedding_model or "sentence-transformers/all-MiniLM-L6-v2").strip()
         self._embedding_provider = None
-        self._chunk_embeddings: List[List[float]] = []
-        self._provider_cache_key: tuple[str, str | None, int | None] | None = None
+        self._provider_cache_key = None
+        self._reranker_name = (reranker or "term_overlap").strip().lower()
+        self._cross_encoder = CrossEncoderReranker(model=reranker_model) if self._reranker_name == "cross_encoder" else None
+        self._session_store = session_store if session_store is not None else SessionStore()
+        self._query_rewriter = query_rewriter
 
-        if self._storage_path is not None:
-            self._load_from_storage()
+        # In-memory lexical/semantic state, loaded from the store.
+        self._chunks: list[dict[str, Any]] = self._store.load_chunks()
+        self._vectors: dict[tuple[str, int], list[float]] = self._store.load_vectors()
+        self._vector_key: tuple[str, str | None, int | None] | None = self._store.load_vector_key()
+        self._bm25 = BM25Index()
+        self._bm25.rebuild({(c["source_id"], c["chunk_index"]): KnowledgeBase._tokenize(c["text"]) for c in self._chunks})
 
+    # ------------------------------------------------------------------ validators
     @staticmethod
     def _validate_chunk_config(chunk_size: int, chunk_overlap: int) -> None:
         if chunk_size <= 0:
@@ -87,55 +129,51 @@ class KnowledgeBase:
         if normalized_retrieval not in SUPPORTED_RETRIEVAL_MODES:
             raise ValueError("retrieval must be one of: tfidf, semantic, hybrid")
         if normalized_reranker not in SUPPORTED_RERANKERS:
-            raise ValueError("reranker must be one of: none, term_overlap")
+            raise ValueError("reranker must be one of: none, term_overlap, cross_encoder")
         return normalized_retrieval, normalized_reranker
 
+    # ----------------------------------------------------------------- text utils
     @staticmethod
     def _normalize(text: str) -> str:
         return " ".join(text.split())
 
     @staticmethod
-    def _tokenize(text: str) -> List[str]:
-        return TOKEN_PATTERN.findall(KnowledgeBase._normalize(text).lower())
+    def _tokenize(text: str) -> list[str]:
+        return _TOKEN_RE.findall(KnowledgeBase._normalize(text).lower())
 
     @staticmethod
-    def _split_sentences(text: str) -> List[str]:
+    def _split_sentences(text: str) -> list[str]:
         normalized = KnowledgeBase._normalize(text)
         if not normalized:
             return []
-        return [segment.strip() for segment in SENTENCE_PATTERN.split(normalized) if segment.strip()] or [normalized]
+        return [segment.strip() for segment in _SENTENCE_RE.split(normalized) if segment.strip()] or [normalized]
 
     @staticmethod
-    def _split_paragraphs(text: str) -> List[str]:
-        paragraphs = [KnowledgeBase._normalize(block) for block in PARAGRAPH_PATTERN.split(text) if block.strip()]
+    def _split_paragraphs(text: str) -> list[str]:
+        paragraphs = [KnowledgeBase._normalize(block) for block in _PARAGRAPH_RE.split(text) if block.strip()]
         return [paragraph for paragraph in paragraphs if paragraph]
 
     @staticmethod
-    def _normalize_metadata(metadata: Dict[str, Any] | None) -> Dict[str, Any]:
+    def _normalize_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
         if not metadata:
             return {}
         if not isinstance(metadata, dict):
             raise ValueError("metadata must be a JSON-like object")
+        import json
+
         try:
             json.dumps(metadata)
         except TypeError as exc:
             raise ValueError("metadata must be JSON-serializable") from exc
         return dict(metadata)
 
-    @property
-    def storage_path(self) -> str | None:
-        return str(self._storage_path) if self._storage_path else None
-
-    @property
-    def persistent(self) -> bool:
-        return self._storage_path is not None
-
-    def _split_chunks_tokens(self, text: str, chunk_size: int, chunk_overlap: int) -> List[str]:
-        tokens = re.findall(TOKEN_PATTERN.pattern, self._normalize(text))
+    # ------------------------------------------------------------------ chunking
+    def _split_chunks_tokens(self, text: str, chunk_size: int, chunk_overlap: int) -> list[str]:
+        tokens = _TOKEN_RE.findall(self._normalize(text))
         if not tokens:
             return []
         stride = chunk_size - chunk_overlap
-        chunks: List[str] = []
+        chunks: list[str] = []
         for start in range(0, len(tokens), stride):
             chunk_tokens = tokens[start:start + chunk_size]
             if chunk_tokens:
@@ -144,9 +182,9 @@ class KnowledgeBase:
                 break
         return chunks
 
-    def _chunk_units(self, units: List[str], chunk_size: int, chunk_overlap: int) -> List[str]:
-        chunks: List[str] = []
-        current_units: List[str] = []
+    def _chunk_units(self, units: list[str], chunk_size: int, chunk_overlap: int) -> list[str]:
+        chunks: list[str] = []
+        current_units: list[str] = []
         current_token_count = 0
         for unit in units:
             clean_unit = self._normalize(unit)
@@ -161,7 +199,7 @@ class KnowledgeBase:
                 continue
             if current_units and current_token_count + len(unit_tokens) > chunk_size:
                 chunks.append(self._normalize(" ".join(current_units)))
-                overlap_units: List[str] = []
+                overlap_units: list[str] = []
                 overlap_tokens = 0
                 if chunk_overlap > 0:
                     for previous_unit in reversed(current_units):
@@ -178,7 +216,7 @@ class KnowledgeBase:
             chunks.append(self._normalize(" ".join(current_units)))
         return chunks
 
-    def _split_chunks(self, text: str, chunk_size: int, chunk_overlap: int, chunking_strategy: str) -> List[str]:
+    def _split_chunks(self, text: str, chunk_size: int, chunk_overlap: int, chunking_strategy: str) -> list[str]:
         strategy = self._validate_chunking_strategy(chunking_strategy)
         if strategy == "tokens":
             return self._split_chunks_tokens(text, chunk_size, chunk_overlap)
@@ -187,7 +225,7 @@ class KnowledgeBase:
         paragraphs = self._split_paragraphs(text)
         if strategy == "paragraph":
             return self._chunk_units(paragraphs, chunk_size, chunk_overlap)
-        smart_units: List[str] = []
+        smart_units: list[str] = []
         for paragraph in paragraphs or [text]:
             if len(self._tokenize(paragraph)) <= max(1, chunk_size // 2):
                 smart_units.append(paragraph)
@@ -195,111 +233,230 @@ class KnowledgeBase:
                 smart_units.extend(self._split_sentences(paragraph))
         return self._chunk_units(smart_units, chunk_size, chunk_overlap)
 
+    # -------------------------------------------------------------- ingest prepare
     @staticmethod
-    def _vectorize(tokens: List[str], doc_freq: Dict[str, int], n_chunks: int) -> Dict[str, float]:
-        if not tokens or n_chunks <= 0:
-            return {}
-        frequencies = Counter(tokens)
-        vector: Dict[str, float] = {}
-        for token, tf in frequencies.items():
-            idf = math.log((1 + n_chunks) / (1 + doc_freq[token])) + 1.0
-            vector[token] = tf * idf
-        return vector
+    def _workspace_filter(workspace_id: str | None, existing: dict[str, Any] | None) -> dict[str, Any] | None:
+        """Server-enforced workspace filter (Phase 4.1): every workspace-scoped
+        operation adds an exact-match ``workspace_id`` metadata requirement."""
+        merged = dict(existing or {})
+        if workspace_id:
+            merged["workspace_id"] = workspace_id
+        return merged or None
 
+    def _prepare_ingest(self, source_id: str, content: str, *, chunk_size: int | None = None,
+                        chunk_overlap: int | None = None, chunking_strategy: str = "smart",
+                        metadata: dict[str, Any] | None = None,
+                        workspace_id: str | None = None) -> tuple[str, list[str], dict[str, Any], str]:
+        """Validate and chunk a document without touching any index state (Phase 0)."""
+        if not source_id or not source_id.strip():
+            raise ValueError("source_id cannot be empty")
+        if not content or not content.strip():
+            raise ValueError("content cannot be empty")
+        normalized_source_id = source_id.strip()
+        safe_metadata = self._normalize_metadata(metadata)
+        if workspace_id:
+            safe_metadata["workspace_id"] = workspace_id
+        chunk_size = self._chunk_size if chunk_size is None else chunk_size
+        chunk_overlap = self._chunk_overlap if chunk_overlap is None else chunk_overlap
+        self._validate_chunk_config(chunk_size, chunk_overlap)
+        normalized_chunking_strategy = self._validate_chunking_strategy(chunking_strategy)
+        chunks = self._split_chunks(content, chunk_size, chunk_overlap, normalized_chunking_strategy)
+        if not chunks:
+            raise ValueError("content did not produce any searchable chunks")
+        return normalized_source_id, chunks, safe_metadata, normalized_chunking_strategy
+
+    def _build_indexed_chunks(self, source_id: str, chunks: list[str], safe_metadata: dict[str, Any],
+                              chunking_strategy: str) -> list[dict[str, Any]]:
+        indexed: list[dict[str, Any]] = []
+        for idx, chunk_text in enumerate(chunks):
+            chunk_metadata = dict(safe_metadata)
+            chunk_metadata.setdefault("chunking_strategy", chunking_strategy)
+            chunk_metadata.setdefault("token_count", len(self._tokenize(chunk_text)))
+            indexed.append({
+                "source_id": source_id,
+                "chunk_index": idx,
+                "text": chunk_text,
+                "metadata": chunk_metadata,
+            })
+        return indexed
+
+    def _add_chunks_to_index(self, chunks: list[dict[str, Any]]) -> None:
+        for chunk in chunks:
+            key = (chunk["source_id"], chunk["chunk_index"])
+            self._bm25.add(key, KnowledgeBase._tokenize(chunk["text"]))
+
+    def _remove_chunks_from_index(self, source_id: str) -> None:
+        self._bm25.remove_source(source_id)
+
+    # ------------------------------------------------------------------ ingest
+    def ingest_with_info(self, source_id: str, content: str, *, chunk_size: int | None = None,
+                         chunk_overlap: int | None = None, chunking_strategy: str = "smart",
+                         metadata: dict[str, Any] | None = None, replace_existing: bool = True,
+                         workspace_id: str | None = None) -> dict[str, Any]:
+        normalized_source_id, chunks, safe_metadata, normalized_chunking_strategy = self._prepare_ingest(
+            source_id, content, chunk_size=chunk_size, chunk_overlap=chunk_overlap,
+            chunking_strategy=chunking_strategy, metadata=metadata, workspace_id=workspace_id)
+
+        with self._lock:
+            existing = any(chunk["source_id"] == normalized_source_id for chunk in self._chunks)
+            if replace_existing:
+                self._chunks = [chunk for chunk in self._chunks if chunk["source_id"] != normalized_source_id]
+                self._remove_chunks_from_index(normalized_source_id)
+            indexed = self._build_indexed_chunks(normalized_source_id, chunks, safe_metadata, normalized_chunking_strategy)
+            self._chunks.extend(indexed)
+            self._add_chunks_to_index(indexed)
+            self._store.save_chunks(self._chunks)
+            self._metadata_store.upsert_document(
+                DocumentRecord.from_chunk_metadata(normalized_source_id, len(indexed), indexed[0]["metadata"]))
+            return {
+                "source_id": normalized_source_id,
+                "chunks_indexed": len(indexed),
+                "total_chunks": len(self._chunks),
+                "replaced_existing": existing and replace_existing,
+                "content_hash": safe_metadata.get("content_hash"),
+            }
+
+    def ingest_many(self, documents: list[dict[str, Any]]) -> int:
+        """Atomically ingest several documents; returns total chunks indexed.
+
+        Every document is validated and chunked before any index state is
+        mutated. If any document is invalid a ``ValueError`` is raised and the
+        index (and its persistence file) is left exactly as it was.
+        """
+        prepared = [
+            self._prepare_ingest(
+                str(document.get("source_id") or ""),
+                str(document.get("content") or ""),
+                chunk_size=document.get("chunk_size"),
+                chunk_overlap=document.get("chunk_overlap"),
+                chunking_strategy=str(document.get("chunking_strategy") or "smart"),
+                metadata=document.get("metadata"),
+            )
+            for document in documents
+        ]
+        if not prepared:
+            return 0
+        committed: list[tuple[str, list[dict[str, Any]]]] = []
+        with self._lock:
+            total = 0
+            for normalized_source_id, chunks, safe_metadata, normalized_chunking_strategy in prepared:
+                self._chunks = [chunk for chunk in self._chunks if chunk["source_id"] != normalized_source_id]
+                self._remove_chunks_from_index(normalized_source_id)
+                indexed = self._build_indexed_chunks(normalized_source_id, chunks, safe_metadata, normalized_chunking_strategy)
+                self._chunks.extend(indexed)
+                self._add_chunks_to_index(indexed)
+                committed.append((normalized_source_id, indexed))
+                total += len(indexed)
+            self._store.save_chunks(self._chunks)
+            for normalized_source_id, indexed in committed:
+                self._metadata_store.upsert_document(
+                    DocumentRecord.from_chunk_metadata(normalized_source_id, len(indexed), indexed[0]["metadata"]))
+            return total
+
+    def ingest(self, source_id: str, content: str, *, chunk_size: int | None = None,
+               chunk_overlap: int | None = None, chunking_strategy: str = "smart",
+               metadata: dict[str, Any] | None = None) -> int:
+        return int(self.ingest_with_info(source_id, content, chunk_size=chunk_size, chunk_overlap=chunk_overlap,
+                                         chunking_strategy=chunking_strategy, metadata=metadata)["chunks_indexed"])
+
+    # --------------------------------------------------------------- maintenance
     @staticmethod
-    def _cosine_similarity(v1: Dict[str, float], v2: Dict[str, float]) -> float:
-        if not v1 or not v2:
-            return 0.0
-        smaller, larger = (v2, v1) if len(v1) > len(v2) else (v1, v2)
-        dot = sum(weight * larger.get(token, 0.0) for token, weight in smaller.items())
-        norm1 = math.sqrt(sum(weight * weight for weight in v1.values()))
-        norm2 = math.sqrt(sum(weight * weight for weight in v2.values()))
-        if norm1 == 0.0 or norm2 == 0.0:
-            return 0.0
-        return dot / (norm1 * norm2)
+    def _matches_filter(metadata: dict[str, Any], metadata_filter: dict[str, Any] | None) -> bool:
+        if not metadata_filter:
+            return True
+        return all(metadata.get(key) == value for key, value in metadata_filter.items())
 
-    @staticmethod
-    def _cosine_similarity_dense(v1: List[float], v2: List[float]) -> float:
-        if not v1 or not v2 or len(v1) != len(v2):
-            return 0.0
-        dot = sum(a * b for a, b in zip(v1, v2))
-        norm1 = math.sqrt(sum(a * a for a in v1))
-        norm2 = math.sqrt(sum(b * b for b in v2))
-        if norm1 == 0.0 or norm2 == 0.0:
-            return 0.0
-        return dot / (norm1 * norm2)
+    def remove_source(self, source_id: str, *, workspace_id: str | None = None) -> int:
+        with self._lock:
+            normalized = source_id.strip()
+            if workspace_id:
+                # Strict isolation: only delete the source if the caller's workspace matches.
+                if not any(chunk["source_id"] == normalized and chunk["metadata"].get("workspace_id") == workspace_id
+                           for chunk in self._chunks):
+                    return 0
+            before = len(self._chunks)
+            self._chunks = [chunk for chunk in self._chunks
+                            if not (chunk["source_id"] == normalized
+                                    and (not workspace_id or chunk["metadata"].get("workspace_id") == workspace_id))]
+            removed = before - len(self._chunks)
+            self._store.delete_source(normalized)
+            self._remove_chunks_from_index(normalized)
+            self._metadata_store.delete_document(normalized)
+            self._metadata_store.add_audit_event("remove_source", target_id=normalized, status="ok")
+            return removed
 
-    def _rebuild_doc_freq(self) -> None:
-        self._doc_freq = defaultdict(int)
-        for chunk in self._chunks:
-            for token in set(self._tokenize(chunk["text"])):
-                self._doc_freq[token] += 1
+    def clear(self) -> int:
+        with self._lock:
+            removed = len(self._chunks)
+            self._chunks = []
+            self._vectors = {}
+            self._store.delete_all()
+            self._bm25.rebuild({})
+            self._metadata_store.delete_all_documents()
+            self._metadata_store.add_audit_event("clear_all", status="ok")
+            return removed
 
-    def _invalidate_semantic_index(self) -> None:
-        self._chunk_embeddings = []
+    # ------------------------------------------------------------ sessions (2.3)
+    def augment_with_history(self, session_id: str | None, question: str) -> str:
+        """Inject the last turns of the session into the question (empty history = passthrough)."""
+        if not session_id:
+            return question
+        history = self._session_store.history(session_id)
+        if not history:
+            return question
+        lines = ["[Conversation history — earlier turns in this session]"]
+        lines += [f"{turn['role']}: {turn['content']}" for turn in history]
+        lines.append(f"New question: {question}")
+        return "\n".join(lines)
 
-    def _load_from_storage(self) -> None:
-        assert self._storage_path is not None
-        if not self._storage_path.exists():
-            return
-        try:
-            raw_payload = json.loads(self._storage_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise KnowledgeBaseStorageError(f"failed to read persistence file: {self._storage_path}") from exc
-        chunks = raw_payload.get("chunks") if isinstance(raw_payload, dict) else raw_payload
-        if not isinstance(chunks, list):
-            raise KnowledgeBaseStorageError("persistence file is not in a supported format")
-        loaded: List[Dict[str, Any]] = []
-        for entry in chunks:
-            if not isinstance(entry, dict):
-                continue
-            source_id = str(entry.get("source_id", "")).strip()
-            text = str(entry.get("text", "")).strip()
-            if not source_id or not text:
-                continue
-            try:
-                chunk_index = int(entry.get("chunk_index", 0))
-            except (TypeError, ValueError) as exc:
-                raise KnowledgeBaseStorageError("corrupt persistence payload: chunk_index must be an int") from exc
-            metadata = entry.get("metadata", {})
-            if not isinstance(metadata, dict):
-                raise KnowledgeBaseStorageError("corrupt persistence payload: metadata must be dict")
-            loaded.append({"source_id": source_id, "chunk_index": chunk_index, "text": text, "metadata": metadata})
-        self._chunks = loaded
-        self._rebuild_doc_freq()
+    def record_turn(self, session_id: str | None, role: str, content: str) -> None:
+        self._session_store.append(session_id or "", role, content)
 
-    def _persist(self) -> None:
-        if self._storage_path is None:
-            return
-        self._storage_path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "schema_version": self.STORAGE_SCHEMA_VERSION,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-            "chunks": self._chunks,
+    def session_ids(self) -> list[str]:
+        return self._session_store.ids()
+
+    def clear_session(self, session_id: str) -> int:
+        return self._session_store.clear(session_id)
+
+    def add_feedback(self, source_id: str, question: str, answer: str, rating: int | None = None,
+                     comment: str | None = None) -> None:
+        """Persist user feedback for a retrieved answer (Phase 3.8)."""
+        self._metadata_store.add_feedback(source_id, question, answer, rating=rating, comment=comment)
+
+    def list_feedback(self, source_id: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
+        return self._metadata_store.list_feedback(source_id=source_id, limit=limit)
+
+    def list_documents(self, workspace_id: str | None = None) -> list[dict[str, Any]]:
+        records = self._metadata_store.list_documents()
+        if workspace_id:
+            records = [record for record in records if record.workspace_id == workspace_id]
+        return [record.as_summary() for record in records]
+
+    def workspaces(self) -> list[tuple[str, str]]:
+        return self._metadata_store.list_workspaces()
+
+    # --------------------------------------------------------------- persistence
+    @property
+    def storage_path(self) -> str | None:
+        return str(self._storage_path) if self._storage_path else None
+
+    @property
+    def persistent(self) -> bool:
+        return self._storage_path is not None
+
+    def storage_status(self) -> dict[str, Any]:
+        return {
+            "enabled": self._storage_path is not None,
+            "path": str(self._storage_path) if self._storage_path else None,
+            "store_kind": getattr(self._store, "kind", type(self._store).__name__),
         }
-        temporary = self._storage_path.with_name(f"{self._storage_path.name}.tmp")
-        try:
-            temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-            temporary.replace(self._storage_path)
-        except OSError as exc:
-            raise KnowledgeBaseStorageError(f"failed to persist index to: {self._storage_path}") from exc
-
-    def storage_status(self) -> Dict[str, Any]:
-        return {"enabled": self._storage_path is not None, "path": str(self._storage_path) if self._storage_path else None}
 
     def storage_probe(self) -> bool:
-        if self._storage_path is None:
-            return True
-        try:
-            self._storage_path.parent.mkdir(parents=True, exist_ok=True)
-            probe = self._storage_path.with_suffix(".probe")
-            probe.write_text("{}", encoding="utf-8")
-            probe.unlink()
-            return True
-        except OSError:
-            return False
+        return self._store.storage_probe()
 
-    def _build_provider_cache_key(self, embedding_provider: str, embedding_model: str | None, local_dimensions: int | None) -> tuple[str, str | None, int | None]:
+    # ------------------------------------------------------------ embeddings
+    def _build_provider_cache_key(self, embedding_provider: str, embedding_model: str | None,
+                                  local_dimensions: int | None) -> tuple[str, str | None, int | None]:
         normalized = embedding_provider.strip().lower()
         if normalized == "local_tfidf":
             return normalized, None, local_dimensions or 256
@@ -309,13 +466,16 @@ class KnowledgeBase:
             return "onnx_local", (embedding_model or "").strip(), local_dimensions or 256
         return "sentence_transformers", (embedding_model or self._default_embedding_model).strip(), None
 
-    def _load_embedding_provider(self, *, embedding_provider: str = "sentence_transformers", embedding_model: str | None = None, local_dimensions: int = 64):
+    def _load_embedding_provider(self, *, embedding_provider: str = "sentence_transformers",
+                                 embedding_model: str | None = None, local_dimensions: int = 64) -> tuple[Any, tuple[str, str | None, int | None]]:
         normalized_provider = embedding_provider.strip().lower()
         cache_key = self._build_provider_cache_key(normalized_provider, embedding_model, local_dimensions)
         if self._provider_cache_key == cache_key and self._embedding_provider is not None:
-            return self._embedding_provider
+            return self._embedding_provider, cache_key
         if cache_key != self._provider_cache_key:
-            self._invalidate_semantic_index()
+            # Switching providers invalidates stored vectors: re-embed fresh, never mix keys.
+            self._vectors = {}
+            self._vector_key = None
         try:
             provider = build_embedding_provider(
                 ProviderSpec(provider=normalized_provider, model=embedding_model, dimensions=local_dimensions)
@@ -324,170 +484,142 @@ class KnowledgeBase:
             raise RuntimeError(str(exc)) from exc
         self._embedding_provider = provider
         self._provider_cache_key = cache_key
-        return provider
+        return provider, cache_key
 
-    def ingest_with_info(self, source_id: str, content: str, *, chunk_size: int | None = None,
-                         chunk_overlap: int | None = None, chunking_strategy: str = "smart",
-                         metadata: Dict[str, Any] | None = None, replace_existing: bool = True) -> dict[str, Any]:
-        if not source_id or not source_id.strip():
-            raise ValueError("source_id cannot be empty")
-        if not content or not content.strip():
-            raise ValueError("content cannot be empty")
-        normalized_source_id = source_id.strip()
-        safe_metadata = self._normalize_metadata(metadata)
-        chunk_size = self._chunk_size if chunk_size is None else chunk_size
-        chunk_overlap = self._chunk_overlap if chunk_overlap is None else chunk_overlap
-        self._validate_chunk_config(chunk_size, chunk_overlap)
-        normalized_chunking_strategy = self._validate_chunking_strategy(chunking_strategy)
-        chunks = self._split_chunks(content, chunk_size, chunk_overlap, normalized_chunking_strategy)
-        if not chunks:
-            raise ValueError("content did not produce any searchable chunks")
+    def _ensure_semantic_index(self, provider: Any, vector_key: tuple[str, str | None, int | None]) -> None:
+        """Build (or reuse) the vector index without holding the global lock during encode."""
+        if self._vectors and self._vector_key == vector_key:
+            return
+        texts = [chunk["text"] for chunk in self._chunks]
+        vectors: dict[tuple[str, int], list[float]] = {}
+        if texts:
+            provider.fit(texts)
+            encoded = provider.encode(texts)
+            if len(encoded) != len(texts):
+                raise RuntimeError("embedding provider returned an unexpected number of vectors")
+            vectors = {(chunk["source_id"], chunk["chunk_index"]): vec for chunk, vec in zip(self._chunks, encoded, strict=True)}
+        self._vectors = vectors
+        self._vector_key = vector_key
+        self._store.save_vectors(vectors, embedding_key=vector_key)
 
-        with self._lock:
-            existing = any(chunk["source_id"] == normalized_source_id for chunk in self._chunks)
-            if replace_existing:
-                self._chunks = [chunk for chunk in self._chunks if chunk["source_id"] != normalized_source_id]
-            indexed: List[Dict[str, Any]] = []
-            for idx, chunk_text in enumerate(chunks):
-                chunk_metadata = dict(safe_metadata)
-                chunk_metadata.setdefault("chunking_strategy", normalized_chunking_strategy)
-                chunk_metadata.setdefault("token_count", len(self._tokenize(chunk_text)))
-                indexed.append({
-                    "source_id": normalized_source_id,
-                    "chunk_index": idx,
-                    "text": chunk_text,
-                    "metadata": chunk_metadata,
-                })
-            self._chunks.extend(indexed)
-            self._rebuild_doc_freq()
-            self._invalidate_semantic_index()
-            self._persist()
-            return {
-                "source_id": normalized_source_id,
-                "chunks_indexed": len(indexed),
-                "total_chunks": len(self._chunks),
-                "replaced_existing": existing and replace_existing,
-                "content_hash": safe_metadata.get("content_hash"),
-            }
+    def _query_semantic(self, question: str, provider: Any, vector_key: tuple[str, str | None, int | None],
+                        top_k: int, min_score: float, metadata_filter: dict[str, Any] | None = None) -> list[RetrievedChunk]:
+        query_vector = provider.encode([question])[0]
+        source_ids = sorted({chunk["source_id"] for chunk in self._chunks}) if metadata_filter else None
+        results = self._store.query_vectors(query_vector, top_k=top_k, source_ids=source_ids, embedding_key=vector_key)
+        scored: list[RetrievedChunk] = []
+        for source_id, chunk_index, score, chunk in results:
+            if not isinstance(chunk, dict) or not chunk:
+                continue
+            if score <= 0.0 or score < min_score:
+                continue
+            if not self._matches_filter(chunk.get("metadata", {}), metadata_filter):
+                continue
+            scored.append(RetrievedChunk(source_id, chunk_index, chunk.get("text", ""), score, chunk.get("metadata", {})))
+        scored.sort(key=lambda item: item.score, reverse=True)
+        return scored[:top_k]
 
-    def ingest(self, source_id: str, content: str, *, chunk_size: int | None = None,
-               chunk_overlap: int | None = None, chunking_strategy: str = "smart",
-               metadata: Dict[str, Any] | None = None) -> int:
-        return int(self.ingest_with_info(source_id, content, chunk_size=chunk_size, chunk_overlap=chunk_overlap,
-                                         chunking_strategy=chunking_strategy, metadata=metadata)["chunks_indexed"])
-
-    @staticmethod
-    def _matches_filter(metadata: Dict[str, Any], metadata_filter: Dict[str, Any] | None) -> bool:
-        if not metadata_filter:
-            return True
-        return all(metadata.get(key) == value for key, value in metadata_filter.items())
-
-    def _query_tfidf(self, question: str, top_k: int, min_score: float, metadata_filter: Dict[str, Any] | None = None) -> List[RetrievedChunk]:
-        question_tokens = self._tokenize(question)
+    def _query_bm25(self, question: str, top_k: int, min_score: float,
+                    metadata_filter: dict[str, Any] | None = None) -> list[RetrievedChunk]:
+        question_tokens = KnowledgeBase._tokenize(question)
         if not question_tokens:
             return []
-        n_chunks = len(self._chunks)
-        question_vector = self._vectorize(question_tokens, self._doc_freq, n_chunks)
-        scored: List[RetrievedChunk] = []
-        for chunk in self._chunks:
+        chunk_by_key = {(c["source_id"], c["chunk_index"]): c for c in self._chunks}
+        scored: list[RetrievedChunk] = []
+        for key, score in self._bm25.top_k(question_tokens, k=top_k):
+            chunk = chunk_by_key.get(key)
+            if chunk is None or score <= 0.0 or score < min_score:
+                continue
             if not self._matches_filter(chunk["metadata"], metadata_filter):
                 continue
-            chunk_vector = self._vectorize(self._tokenize(chunk["text"]), self._doc_freq, n_chunks)
-            score = self._cosine_similarity(question_vector, chunk_vector)
-            if score >= min_score and score > 0.0:
-                scored.append(RetrievedChunk(chunk["source_id"], chunk["chunk_index"], chunk["text"], score, chunk["metadata"]))
+            scored.append(RetrievedChunk(chunk["source_id"], chunk["chunk_index"], chunk["text"], score, chunk["metadata"]))
         scored.sort(key=lambda item: item.score, reverse=True)
         return scored[:top_k]
 
-    def _build_semantic_index(self, *, embedding_provider: str, embedding_model: str | None = None, local_dimensions: int = 64) -> List[List[float]]:
-        provider = self._load_embedding_provider(embedding_provider=embedding_provider, embedding_model=embedding_model, local_dimensions=local_dimensions)
-        if not self._chunks:
-            self._chunk_embeddings = []
-            return []
-        if self._chunk_embeddings and len(self._chunk_embeddings) == len(self._chunks):
-            return self._chunk_embeddings
-        provider.fit([chunk["text"] for chunk in self._chunks])
-        self._chunk_embeddings = provider.encode([chunk["text"] for chunk in self._chunks])
-        if len(self._chunk_embeddings) != len(self._chunks):
-            raise RuntimeError("embedding provider returned an unexpected number of vectors")
-        return self._chunk_embeddings
-
-    def _query_semantic(self, question: str, top_k: int, min_score: float, embedding_model: str | None,
-                        embedding_provider: str, local_dimensions: int, metadata_filter: Dict[str, Any] | None = None) -> List[RetrievedChunk]:
-        provider = self._load_embedding_provider(embedding_provider=embedding_provider, embedding_model=embedding_model, local_dimensions=local_dimensions)
-        embeddings = self._build_semantic_index(embedding_provider=embedding_provider, embedding_model=embedding_model, local_dimensions=local_dimensions)
-        q_vector = provider.encode([question])[0]
-        scored: List[RetrievedChunk] = []
-        for idx, chunk in enumerate(self._chunks):
-            if not self._matches_filter(chunk["metadata"], metadata_filter):
-                continue
-            score = self._cosine_similarity_dense(q_vector, embeddings[idx])
-            if score >= min_score and score > 0.0:
-                scored.append(RetrievedChunk(chunk["source_id"], chunk["chunk_index"], chunk["text"], score, chunk["metadata"]))
-        scored.sort(key=lambda item: item.score, reverse=True)
-        return scored[:top_k]
-
-    @staticmethod
-    def _merge_rankings_rrf(result_sets: List[List[RetrievedChunk]], top_k: int, k: int = 60) -> List[RetrievedChunk]:
-        fused_scores: Dict[tuple[str, int], float] = defaultdict(float)
-        canonical: Dict[tuple[str, int], RetrievedChunk] = {}
-        for results in result_sets:
-            for rank, chunk in enumerate(results, start=1):
-                key = (chunk.source_id, chunk.chunk_index)
-                fused_scores[key] += 1.0 / (k + rank)
-                canonical[key] = chunk
-        fused = [RetrievedChunk(item.source_id, item.chunk_index, item.text, fused_scores[key], item.metadata)
-                 for key, item in canonical.items()]
-        fused.sort(key=lambda item: item.score, reverse=True)
-        return fused[:top_k]
-
-    def _rerank_chunks(self, question: str, chunks: List[RetrievedChunk], *, reranker: str, top_k: int) -> List[RetrievedChunk]:
+    # --------------------------------------------------------------- reranking
+    def _rerank_chunks(self, question: str, chunks: list[RetrievedChunk], *, reranker: str, top_k: int) -> list[RetrievedChunk]:
         if reranker == "none":
             return chunks[:top_k]
-        question_tokens = self._tokenize(question)
+        if reranker == "cross_encoder" and self._cross_encoder is not None:
+            scores = self._cross_encoder.score_pairs(question, [chunk.text for chunk in chunks])
+            reranked = [
+                RetrievedChunk(chunk.source_id, chunk.chunk_index, chunk.text, float(score), chunk.metadata)
+                for chunk, score in zip(chunks, scores, strict=True)
+            ]
+            reranked.sort(key=lambda item: item.score, reverse=True)
+            return reranked[:top_k]
+        question_tokens = KnowledgeBase._tokenize(question)
         if not question_tokens:
             return chunks[:top_k]
         question_terms = set(question_tokens)
-        question_bigrams = set(zip(question_tokens, question_tokens[1:]))
-        normalized_question = self._normalize(question).lower()
-        reranked: List[RetrievedChunk] = []
+        question_bigrams = set(itertools.pairwise(question_tokens))
+        normalized_question = KnowledgeBase._normalize(question).lower()
+        reranked = []
         for chunk in chunks:
-            chunk_tokens = self._tokenize(chunk.text)
+            chunk_tokens = KnowledgeBase._tokenize(chunk.text)
             chunk_terms = set(chunk_tokens)
-            chunk_bigrams = set(zip(chunk_tokens, chunk_tokens[1:]))
+            chunk_bigrams = set(itertools.pairwise(chunk_tokens))
             overlap_score = len(question_terms & chunk_terms) / max(1, len(question_terms))
             bigram_score = len(question_bigrams & chunk_bigrams) / max(1, len(question_bigrams))
-            exact_phrase_bonus = 1.0 if normalized_question and normalized_question in self._normalize(chunk.text).lower() else 0.0
+            exact_phrase_bonus = 1.0 if normalized_question and normalized_question in KnowledgeBase._normalize(chunk.text).lower() else 0.0
             score = (0.55 * chunk.score) + (0.3 * overlap_score) + (0.1 * bigram_score) + (0.05 * exact_phrase_bonus)
             reranked.append(RetrievedChunk(chunk.source_id, chunk.chunk_index, chunk.text, score, chunk.metadata))
         reranked.sort(key=lambda item: item.score, reverse=True)
         return reranked[:top_k]
 
+    # ----------------------------------------------------------------- queries
     def query_with_trace(self, question: str, top_k: int = 5, min_score: float = 0.08, retrieval: str = "hybrid",
                          embedding_model: str | None = None, embedding_provider: str = "sentence_transformers",
                          local_dimensions: int = 64, reranker: str = "term_overlap", candidate_pool_size: int | None = None,
-                         metadata_filter: Dict[str, Any] | None = None) -> tuple[List[RetrievedChunk], Dict[str, Any]]:
+                         metadata_filter: dict[str, Any] | None = None, workspace_id: str | None = None
+                         ) -> tuple[list[RetrievedChunk], dict[str, Any]]:
         if not question or not question.strip():
             return [], {"retrieval": retrieval, "reranker": reranker, "stages": []}
+        metadata_filter = self._workspace_filter(workspace_id, metadata_filter)
         normalized_retrieval, normalized_reranker = self._validate_query_config(retrieval, reranker)
         candidate_limit = max(top_k, candidate_pool_size or top_k)
+
+        # Multi-query retrieval (2.4): expand the question into variants when rewriting is enabled.
+        queries = [question]
+        if self._query_rewriter is not None and normalized_retrieval in ("tfidf", "semantic", "hybrid"):
+            try:
+                variants = [q.strip() for q in self._query_rewriter(question) if q and q.strip()]
+            except Exception:
+                variants = []
+            queries = variants[:3] or [question]
+
+        provider: Any = None
+        vector_key: tuple[str, str | None, int | None] | None = None
+        if normalized_retrieval in ("semantic", "hybrid"):
+            provider, vector_key = self._load_embedding_provider(
+                embedding_provider=embedding_provider, embedding_model=embedding_model, local_dimensions=local_dimensions)
+            self._ensure_semantic_index(provider, vector_key)
+
         with self._lock:
             if not self._chunks:
-                return [], {"retrieval": normalized_retrieval, "reranker": normalized_reranker, "stages": [], "candidates_considered": 0}
-            stages: List[Dict[str, Any]] = []
+                return [], {"retrieval": normalized_retrieval, "reranker": normalized_reranker, "stages": [],
+                            "candidates_considered": 0}
+            stages: list[dict[str, Any]] = []
+            legs: list[list[RetrievedChunk]] = []
             if normalized_retrieval == "tfidf":
-                candidates = self._query_tfidf(question, candidate_limit, min_score, metadata_filter)
+                legs = [self._query_bm25(q, candidate_limit, min_score, metadata_filter) for q in queries]
+                candidates = self._merge_rankings_rrf(legs, candidate_limit)
                 stages.append({"stage": "tfidf", "candidates": len(candidates)})
             elif normalized_retrieval == "semantic":
-                candidates = self._query_semantic(question, candidate_limit, min_score, embedding_model, embedding_provider, local_dimensions, metadata_filter)
+                legs = [self._query_semantic(q, provider, vector_key, candidate_limit, min_score, metadata_filter)
+                        for q in queries]
+                candidates = self._merge_rankings_rrf(legs, candidate_limit)
                 stages.append({"stage": "semantic", "candidates": len(candidates), "embedding_provider": embedding_provider})
             else:
-                tfidf = self._query_tfidf(question, candidate_limit, min_score, metadata_filter)
-                semantic = self._query_semantic(question, candidate_limit, min_score, embedding_model, embedding_provider, local_dimensions, metadata_filter)
-                candidates = self._merge_rankings_rrf([tfidf, semantic], candidate_limit)
+                bm25_legs = [self._query_bm25(q, candidate_limit, min_score, metadata_filter) for q in queries]
+                semantic_legs = [self._query_semantic(q, provider, vector_key, candidate_limit, min_score, metadata_filter)
+                                 for q in queries]
+                legs = bm25_legs + semantic_legs
+                candidates = self._merge_rankings_rrf(legs, candidate_limit)
                 stages.extend([
-                    {"stage": "tfidf", "candidates": len(tfidf)},
-                    {"stage": "semantic", "candidates": len(semantic), "embedding_provider": embedding_provider},
+                    {"stage": "tfidf", "candidates": sum(len(leg) for leg in bm25_legs)},
+                    {"stage": "semantic", "candidates": sum(len(leg) for leg in semantic_legs),
+                     "embedding_provider": embedding_provider},
                     {"stage": "rrf_fusion", "candidates": len(candidates)},
                 ])
             reranked = self._rerank_chunks(question, candidates, reranker=normalized_reranker, top_k=top_k)
@@ -506,74 +638,47 @@ class KnowledgeBase:
             }
             return reranked, trace
 
+    @staticmethod
+    def _merge_rankings_rrf(result_sets: list[list[RetrievedChunk]], top_k: int, k: int = 60) -> list[RetrievedChunk]:
+        fused_scores: dict[tuple[str, int], float] = defaultdict(float)
+        canonical: dict[tuple[str, int], RetrievedChunk] = {}
+        for results in result_sets:
+            for rank, chunk in enumerate(results, start=1):
+                key = (chunk.source_id, chunk.chunk_index)
+                fused_scores[key] += 1.0 / (k + rank)
+                canonical[key] = chunk
+        fused = [RetrievedChunk(item.source_id, item.chunk_index, item.text, fused_scores[key], item.metadata)
+                 for key, item in canonical.items()]
+        fused.sort(key=lambda item: item.score, reverse=True)
+        return fused[:top_k]
+
     def query(self, question: str, top_k: int = 5, min_score: float = 0.08, retrieval: str = "tfidf",
               embedding_model: str | None = None, embedding_provider: str = "sentence_transformers",
               local_dimensions: int = 64, reranker: str = "term_overlap", candidate_pool_size: int | None = None,
-              metadata_filter: Dict[str, Any] | None = None) -> List[RetrievedChunk]:
+              metadata_filter: dict[str, Any] | None = None) -> list[RetrievedChunk]:
         chunks, _ = self.query_with_trace(question, top_k, min_score, retrieval, embedding_model, embedding_provider,
                                           local_dimensions, reranker, candidate_pool_size, metadata_filter)
         return chunks
 
-    def remove_source(self, source_id: str) -> int:
+    # ------------------------------------------------------------------ stats
+    def stats(self) -> dict[str, Any]:
         with self._lock:
-            normalized = source_id.strip()
-            before = len(self._chunks)
-            self._chunks = [chunk for chunk in self._chunks if chunk["source_id"] != normalized]
-            removed = before - len(self._chunks)
-            if removed:
-                self._rebuild_doc_freq()
-                self._invalidate_semantic_index()
-                self._persist()
-            return removed
-
-    def clear(self) -> int:
-        with self._lock:
-            removed = len(self._chunks)
-            self._chunks.clear()
-            self._doc_freq.clear()
-            self._invalidate_semantic_index()
-            self._persist()
-            return removed
-
-    def list_documents(self) -> list[dict[str, Any]]:
-        with self._lock:
-            grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
-            for chunk in self._chunks:
-                grouped[chunk["source_id"]].append(chunk)
-            documents: list[dict[str, Any]] = []
-            for source_id, chunks in sorted(grouped.items()):
-                first = chunks[0]["metadata"]
-                documents.append({
-                    "source_id": source_id,
-                    "chunks": len(chunks),
-                    "filename": first.get("filename"),
-                    "file_type": first.get("file_type"),
-                    "content_hash": first.get("content_hash"),
-                    "ingested_at": first.get("ingested_at"),
-                    "updated_at": first.get("updated_at", first.get("ingested_at")),
-                    "metadata": {k: v for k, v in first.items() if k not in {"filename", "file_type", "content_hash", "ingested_at", "updated_at", "token_count", "chunking_strategy"}},
-                })
-            return documents
-
-    def stats(self) -> Dict[str, Any]:
-        with self._lock:
-            unique_sources = len({chunk["source_id"] for chunk in self._chunks})
-            provider_name = model_name = None
-            provider_dims = None
+            provider_name = provider_model = provider_dims = None
             if self._provider_cache_key is not None:
-                provider_name, model_name, provider_dims = self._provider_cache_key
+                provider_name, provider_model, provider_dims = self._provider_cache_key
             return {
-                "documents": unique_sources,
+                "documents": self._metadata_store.document_count(),
                 "chunks": len(self._chunks),
                 "embedding_provider": provider_name,
-                "embedding_model": model_name,
+                "embedding_model": provider_model,
                 "embedding_dimensions": provider_dims,
-                "embedding_chunks_indexed": len(self._chunk_embeddings),
+                "embedding_chunks_indexed": len(self._vectors),
                 "default_chunk_size": self._chunk_size,
                 "default_chunk_overlap": self._chunk_overlap,
                 "storage": self.storage_status(),
             }
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         with self._lock:
-            return {"status": "ok", "storage": self.storage_status(), "documents": len({c["source_id"] for c in self._chunks}), "chunks": len(self._chunks)}
+            return {"status": "ok", "storage": self.storage_status(),
+                    "documents": len({c["source_id"] for c in self._chunks}), "chunks": len(self._chunks)}

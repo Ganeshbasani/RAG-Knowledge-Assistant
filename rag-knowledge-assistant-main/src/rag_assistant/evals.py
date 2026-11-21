@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List
+from collections.abc import Iterable
+from typing import Any
 
 from rag_assistant.knowledge_base import KnowledgeBase
 
 
-def run_retrieval_eval(kb: KnowledgeBase, cases: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
-    results: List[Dict[str, Any]] = []
+def run_retrieval_eval(kb: KnowledgeBase, cases: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    results: list[dict[str, Any]] = []
     total_hits = 0
     total_reciprocal_rank = 0.0
 
@@ -24,7 +25,7 @@ def run_retrieval_eval(kb: KnowledgeBase, cases: Iterable[Dict[str, Any]]) -> Di
             candidate_pool_size=int(case.get("candidate_pool_size", 10)),
         )
 
-        returned_source_ids: List[str] = []
+        returned_source_ids: list[str] = []
         seen_sources: set[str] = set()
         for chunk in chunks:
             if chunk.source_id in seen_sources:
@@ -67,3 +68,73 @@ def run_retrieval_eval(kb: KnowledgeBase, cases: Iterable[Dict[str, Any]]) -> Di
         "mrr": round(total_reciprocal_rank / case_count, 4),
         "results": results,
     }
+
+
+# ---------------------------------------------------------------------------
+# Golden-set loading (3.3) + extended metrics (3.4)
+# ---------------------------------------------------------------------------
+
+def load_cases(path: str) -> list[dict[str, Any]]:
+    """Load golden eval cases from a JSONL file."""
+    import json
+
+    cases: list[dict[str, Any]] = []
+    with open(path, encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if line:
+                cases.append(json.loads(line))
+    return cases
+
+
+def _eligible(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [r for r in results if r["expected_source_ids"]]
+
+
+def recall_at_k(results: list[dict[str, Any]], k: int = 5) -> float:
+    """Fraction of cases (with expectations) where an expected source is in the top-k."""
+    eligible = _eligible(results)
+    if not eligible:
+        return 0.0
+    hits = sum(1 for r in eligible if set(r["expected_source_ids"]) & set(r["returned_source_ids"][:k]))
+    return round(hits / len(eligible), 4)
+
+
+def ndcg(results: list[dict[str, Any]], k: int = 5) -> float:
+    """Mean normalized DCG: relevance of returned sources against the expected set."""
+    eligible = _eligible(results)
+    if not eligible:
+        return 0.0
+    import math
+
+    total = 0.0
+    for r in eligible:
+        expected = set(r["expected_source_ids"])
+        dcg = sum(1.0 / math.log2(i + 2) for i, sid in enumerate(r["returned_source_ids"][:k]) if sid in expected)
+        idcg = sum(1.0 / math.log2(i + 2) for i in range(min(len(expected), k)))
+        if idcg:
+            total += dcg / idcg
+    return round(total / len(eligible), 4)
+
+
+def abstention_accuracy(results: list[dict[str, Any]]) -> float:
+    """Fraction of unanswerable cases (no expected sources) where nothing was retrieved."""
+    unanswerable = [r for r in results if not r["expected_source_ids"]]
+    if not unanswerable:
+        return 1.0
+    correct = sum(1 for r in unanswerable if not r["returned_source_ids"])
+    return round(correct / len(unanswerable), 4)
+
+
+def citation_precision(results: list[dict[str, Any]], min_relevance: float = 0.3) -> float:
+    """Fraction of cases where the expected (cited) sources are sufficiently represented."""
+    eligible = _eligible(results)
+    if not eligible:
+        return 0.0
+    supported = 0
+    for r in eligible:
+        expected = set(r["expected_source_ids"])
+        returned = set(r["returned_source_ids"])
+        if expected and len(expected & returned) / max(1, len(expected)) >= min_relevance:
+            supported += 1
+    return round(supported / len(eligible), 4)

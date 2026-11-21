@@ -1,9 +1,10 @@
 services:
   - type: web
-    name: trustaware-rag-assistant-api
+    name: RAG-Knowledge-Assistant
     runtime: docker
-    plan: starter
+    plan: free
     dockerfilePath: ./Dockerfile
+    dockerContext: .
     healthCheckPath: /health
     envVars:
       - key: RAG_HOST
@@ -12,9 +13,15 @@ services:
         value: /app/data/rag-index.json
       - key: RAG_UPLOAD_DIR
         value: /app/data/uploads
-      - key: RAG_ALLOWED_ORIGINS
-        sync: false
-      - key: RAG_API_KEY
-        sync: false
-      - key: RAG_LLM_API_KEY
+      - key: RAG_LLM_PROVIDER
+        value: gemini
+      - key: RAG_LLM_MODEL
+        value: gemini-3.7-flash
+      - key: RAG_RATE_LIMIT_REQUESTS
+        value: "12"
+      - key: RAG_RATE_LIMIT_WINDOW_SECONDS
+        value: "60"
+      - key: RAG_MAX_REQUEST_BYTES
+        value: "5242880"
+      - key: GEMINI_API_KEY
         sync: false

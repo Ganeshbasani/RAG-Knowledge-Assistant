@@ -1,6 +1,7 @@
 """Small helper entrypoint for launching the API server."""
 
 import argparse
+
 import uvicorn
 
 from rag_assistant.config import AppConfig

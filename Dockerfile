@@ -9,7 +9,7 @@ COPY rag-knowledge-assistant-main/README.md ./
 COPY rag-knowledge-assistant-main/LICENSE ./
 COPY rag-knowledge-assistant-main/src ./src
 COPY rag-knowledge-assistant-main/ui ./ui
-RUN pip install --no-cache-dir -e ".[embeddings]" \
+RUN pip install --no-cache-dir . \
     && useradd --create-home --shell /usr/sbin/nologin appuser \
     && mkdir -p /app/data/uploads \
     && chown -R appuser:appuser /app

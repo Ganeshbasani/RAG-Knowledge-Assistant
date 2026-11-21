@@ -1,0 +1,5 @@
+{"question": "What is the remote work policy?", "expected_source_ids": ["remote-policy"], "reference_answer": "Employees may work remotely three days a week.", "must_contain": ["three", "remotely"]}
+{"question": "How many days per week can employees work from home?", "expected_source_ids": ["remote-policy"], "reference_answer": "Three days per week.", "must_contain": ["three", "days"]}
+{"question": "What are the quarterly budget approval steps?", "expected_source_ids": ["budget-process"], "reference_answer": "Draft, manager review, then CFO sign-off.", "must_contain": ["manager", "CFO"]}
+{"question": "What is the API rate limit policy?", "expected_source_ids": ["api-policy"], "reference_answer": "Limits are per API key and enforced per minute.", "must_contain": ["per API key"]}
+{"question": "What is the employee onboarding checklist?", "expected_source_ids": ["onboarding"], "reference_answer": "Complete HR forms, IT setup, and the first-week meetups.", "must_contain": ["HR forms"]}

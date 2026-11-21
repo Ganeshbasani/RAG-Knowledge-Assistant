@@ -4,7 +4,7 @@ A production-style RAG application for document-grounded Q&A. Users upload docum
 
 ## Core capabilities
 
-- PDF, DOCX, TXT, and Markdown ingestion
+- PDF, DOCX, PPTX, XLSX, CSV/TSV, JSON, HTML, RTF, TXT, Markdown, and common image ingestion (image text is extracted with RapidOCR)
 - Smart chunking with configurable size and overlap
 - Keyword, semantic, and hybrid retrieval
 - Reciprocal Rank Fusion (RRF)
@@ -88,18 +88,20 @@ Then choose `sentence_transformers` as the embedding provider and configure `RAG
 
 ## Enable LLM generation
 
-Without an external key, the app uses a deterministic extractive answerer so the project remains runnable.
+The hosted portfolio setup uses Gemini. Set `RAG_LLM_PROVIDER=gemini`, `RAG_LLM_MODEL=gemini-3.7-flash`, and the server-side `GEMINI_API_KEY`; visitors never provide or see the key. Without a key, the app remains usable with a local extractive fallback.
 
-For an OpenAI-compatible provider:
+For an OpenAI-compatible provider instead:
 
 ```env
 RAG_LLM_PROVIDER=openai_compatible
 RAG_LLM_API_KEY=your-key
-RAG_LLM_MODEL=gpt-4o-mini
+RAG_LLM_MODEL=gpt-6.2-astra
 RAG_LLM_BASE_URL=https://api.openai.com/v1/chat/completions
 ```
 
-You may point `RAG_LLM_BASE_URL` to another compatible provider.
+You may point `RAG_LLM_BASE_URL` to another compatible provider. ChatGPT subscriptions and API billing are separate; API usage is billed to the OpenAI API project whose key the server uses. See [OpenAI production best practices](https://developers.openai.com/api/docs/guides/production-best-practices).
+
+This setup keeps document upload, indexing, retrieval, and citations in this application and sends only the retrieved context and question to OpenAI for answer generation. To let OpenAI host document search instead, use the [OpenAI File Search tool](https://developers.openai.com/api/docs/guides/tools-file-search); that changes where files are stored and how retrieval is managed.
 
 ## Example query
 
@@ -107,7 +109,7 @@ You may point `RAG_LLM_BASE_URL` to another compatible provider.
 {
   "question": "What is the remote work policy?",
   "retrieval": "hybrid",
-  "embedding_provider": "local_tfidf",
+  "embedding_provider": "local",
   "reranker": "term_overlap",
   "top_k": 5,
   "generate": true
@@ -115,6 +117,76 @@ You may point `RAG_LLM_BASE_URL` to another compatible provider.
 ```
 
 The response includes `answer`, `grounded`, `confidence`, `knowledge_gap`, `citations`, `warnings`, `context`, `generation`, and `trace`.
+
+## Authentication and production mode
+
+With no `RAG_API_KEY` set, API authentication is **disabled** and a warning is logged at startup. The public portfolio demo intentionally leaves it unset so visitors can use the UI. For a private deployment, set `RAG_API_KEY` (requests send it as the `x-api-key` header):
+
+```env
+RAG_API_KEY=your-long-random-secret
+RAG_ENV=production
+```
+
+Setting `RAG_ENV=production` without `RAG_API_KEY` refuses to start. Destructive endpoints are step-up protected: `DELETE /clear` requires the `X-Clear-Confirm: DELETE` header in addition to the API key, and `DELETE /documents/{source_id}` returns `404` for unknown sources. Uploaded file queries (`/ingest/file?source_id=…`) are validated with bounds. Requests are capped at 10 MB on the declared `Content-Length` **and** counted as they stream in, so chunked transfers can't bypass the limit.
+
+## Storage & retrieval (Phase 1)
+
+The knowledge base is split into two storage seams (both stable API):
+
+- `VectorStore` — chunk records + embedding vectors.
+  - `json` (default): zero-dependency embedded JSON index.
+  - `qdrant`: persisted chunks + vectors in Qdrant with payload filters; **Docker Compose ships a Qdrant service + volume** (`docker-compose.yml`).
+- `MetadataStore` — documents, feedback, audit events, eval results. SQLite by default (`rag-metadata.db` beside the index), PostgreSQL via `RAG_DB_URL`.
+
+```env
+RAG_VECTOR_STORE=json                        # or qdrant
+RAG_QDRANT_URL=http://localhost:6333
+RAG_QDRANT_API_KEY=
+RAG_QDRANT_COLLECTION=rag-chunks
+RAG_DB_URL=                                  # e.g. postgresql+psycopg://... (metadata store)
+RAG_RERANKER=term_overlap                    # or cross_encoder
+RAG_RERANKER_MODEL=cross-encoder/ms-marco-MiniLM-L-6-v2
+```
+
+- Embeddings are persisted (keyed by provider/model/dims) and survive restarts; switching providers invalidates and re-embeds.
+- The `tfidf` lexical leg uses an incremental BM25 index (ingest is O(chunk); no more O(N²) corpus rebuilds).
+- Cross-encoder reranking (`cross_encoder`) requires the `[embeddings]` extra.
+
+**Migrate an existing JSON index to Qdrant** (the JSON engine is kept as rollback):
+
+```bash
+python scripts/migrate_json_to_qdrant.py --storage-path data/rag-index.json \
+    --qdrant-url http://localhost:6333 --collection rag-chunks
+```
+
+The script upserts chunks + vectors, then verifies counts and that every migrated chunk is present.
+
+## Generation & interaction (Phase 2)
+
+- **Hosted demo model:** Gemini (`gemini-3.7-flash`) is configured server-side. Add `GEMINI_API_KEY` in Render's Environment page; visitors never provide or see the key. Without it, Atlas uses its local extractive fallback. Gemini's free tier has quotas and provider-specific data terms; use public, non-sensitive demo documents only.
+- **Free hosting limits:** the Render free service sleeps after inactivity and uses ephemeral disk storage. Uploaded files and the search index may disappear after a restart or redeploy. This setup is suitable for a portfolio demonstration, not a persistent production workspace.
+
+- **Streaming answers:** `POST /query` with `"stream": true` → `text/event-stream` (`delta` events + a final `done` event with the full response). The UI appends tokens to the pending message in real time.
+- **Provider adapters:** `RAG_LLM_PROVIDER` defaults to `openai_compatible` with `gpt-6.2-astra` at high reasoning effort for stronger answer quality; supported alternatives include `anthropic`, `gemini`, and `ollama`. Retries with exponential backoff on 429/5xx (3 attempts); optional `RAG_LLM_MAX_OUTPUT_TOKENS` cap.
+- **Conversational memory:** `session_id` on `/query` — history (last 10 turns) is injected into the question for retrieval/generation; `GET /sessions` + `DELETE /sessions/{id}` for management.
+- **Query rewriting:** LLM-based variants (or rule-based fallback without a key); hybrid runs multi-query retrieval, merged via the existing RRF.
+- **Context assembly:** `context_max_tokens` budget, near-duplicate collapse, `[PAGE n]` markers stripped from context text.
+
+## Trust & evaluation (Phase 3)
+
+- **Injection hardening:** untrusted content (question + document excerpts) is wrapped in `<<<UNTRUSTED ... >>>` delimiters; the system prompt carries explicit instruction-priority and data-vs-instructions rules.
+- **Citation verification:** for LLM answers, `grounded` is computed — every citation must exist and the cited chunk must share lexical support with the answer (`generation.citation_verification` per response). Extractive answers are grounded by construction.
+- **Golden datasets:** `tests/fixtures/eval/` — `retrieval_cases`, `answerable_cases`, `unanswerable_cases`, `adversarial_cases`, `conflict_cases` (hand-verified, versioned in git).
+- **Extended harness:** `evals.load_cases()`, `recall_at_k`, `ndcg`, `abstention_accuracy`, `citation_precision` (JSONL loaders for the golden sets).
+- **Feedback:** `POST /feedback` / `GET /feedback` — ratings + comments; rows persist in the metadata store and join the eval dataset.
+- **Audit log:** `remove_source`/`clear_all` events written to the metadata store; destructive API calls are auditable.
+- **Security hardening:** `Content-Security-Policy` on all responses; docs/OpenAPI disabled when an API key is configured.
+
+## Multi-user & production readiness (Phase 4)
+
+- **JWT auth:** `RAG_JWT_SECRET`; `create_token`/`verify_token` (HS256, exp, issuer); `POST /auth/token` to mint tokens; static `RAG_API_KEY` remains the bootstrap admin key.
+- **Workspace isolation:** every query/ingest/delete is server-enforced to the caller's `workspace_id` (KB metadata filter, strict on delete); `GET /documents` scoped to the caller; `GET /workspaces`.
+- New deps: `pyjwt>=2.10`.
 
 ## API
 
@@ -126,11 +198,15 @@ The response includes `answer`, `grounded`, `confidence`, `knowledge_gap`, `cita
 | GET | `/documents` | List documents |
 | POST | `/ingest` | Ingest raw text |
 | POST | `/ingest/file` | Upload PDF/DOCX/TXT/MD |
-| POST | `/ingest/bulk` | Bulk ingestion |
-| POST | `/query` | Grounded query |
+| POST | `/ingest/bulk` | Atomic bulk ingestion |
+| POST | `/ingest/async` | Queue a document for background ingestion (202 + job id) |
+| GET | `/ingest/status/{job_id}` | Background ingestion status |
+| GET | `/sessions` | Active session ids (Phase 2.3) |
+| DELETE | `/sessions/{session_id}` | Clear a session's history (Phase 2.3) |
+| POST | `/query` | Grounded query (add `"stream": true` for SSE) |
 | POST | `/query/semantic` | Semantic-only query |
-| DELETE | `/documents/{source_id}` | Delete a source |
-| DELETE | `/clear` | Clear index |
+| DELETE | `/documents/{source_id}` | Delete a source (404 when unknown) |
+| DELETE | `/clear` | Clear index (requires `X-Clear-Confirm: DELETE`) |
 | POST | `/evals/run` | Retrieval evaluation |
 | GET | `/metrics` | Runtime metrics |
 
@@ -159,7 +235,14 @@ rag-knowledge-assistant/
 │   ├── evals.py
 │   ├── knowledge_base.py
 │   ├── llm.py
-│   └── models.py
+│   ├── metadata.py        ← structured metadata store (Phase 1.4)
+│   ├── models.py
+│   ├── ranking.py         ← BM25 lexical index (Phase 1.6)
+│   ├── rerankers.py       ← cross-encoder reranker (Phase 1.7)
+│   ├── stores.py          ← VectorStore: JSON + Qdrant (Phase 1)
+│   └── __init__.py
+├── scripts/
+│   └── migrate_json_to_qdrant.py
 ├── ui/index.html
 ├── tests/
 ├── Dockerfile

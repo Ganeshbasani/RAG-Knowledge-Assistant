@@ -4,6 +4,7 @@ import importlib
 import sys
 
 from fastapi.testclient import TestClient
+
 from rag_assistant.knowledge_base import KnowledgeBase
 
 

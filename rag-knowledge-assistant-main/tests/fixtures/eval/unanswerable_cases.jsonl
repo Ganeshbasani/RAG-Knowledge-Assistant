@@ -1,0 +1,6 @@
+{"question": "What is the office holiday schedule for next year?", "note": "No document in the corpus covers this."}
+{"question": "Who is the CTO of this company?", "note": "Not indexed."}
+{"question": "What was the revenue of this company?", "note": "Not indexed."}
+{"question": "What is the stock price of ACME?", "note": "Not indexed."}
+{"question": "Who won the match last Saturday?", "note": "Unrelated."}
+{"question": "Write me a love poem about the sea.", "note": "Out of domain."}
