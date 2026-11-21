@@ -602,7 +602,7 @@ def _build_response(question: str, chunks: list, trace: dict, payload: QueryRequ
     if confidence < 0.35:
         knowledge_gap = True
         warnings.append("Evidence confidence is low; the assistant will avoid unsupported claims.")
-    if knowledge_gap:
+    if knowledge_gap and (not payload.generate or not answer_generator.enabled):
         answer = "I couldn't find sufficient evidence in the indexed documents to answer this question."
         return QueryResponse(answer=answer, grounded=False, confidence=confidence, knowledge_gap=True,
                              citations=citations, warnings=list(dict.fromkeys(warnings)), context=context,
@@ -614,18 +614,29 @@ def _build_response(question: str, chunks: list, trace: dict, payload: QueryRequ
                              warnings=list(dict.fromkeys(warnings)), context=context, count=len(context),
                              generation={"provider": "retrieval_only", "used_llm": False}, trace=trace)
 
-    generation_context = [{"source_id": c.source_id, "chunk_index": c.chunk_index, "text": c.text, "metadata": c.metadata} for c in chunks]
+    general_knowledge = knowledge_gap
+    if general_knowledge:
+        warnings.append("No relevant document evidence was found; this answer uses general model knowledge.")
+        context = []
+        citations = []
+        generation_context = []
+    else:
+        generation_context = [{"source_id": c.source_id, "chunk_index": c.chunk_index, "text": c.text, "metadata": c.metadata} for c in chunks]
     try:
         generation = answer_generator.generate(question, generation_context, [c.model_dump() for c in citations])
     except LLMError as exc:
-        logger.warning("LLM generation failed; using extractive fallback: %s", exc)
+        cause = exc.__cause__
+        logger.warning("LLM generation failed (provider=%s model=%s cause=%s); using fallback: %s",
+                       answer_generator.provider, answer_generator.model,
+                       str(cause)[:300] if cause else "unknown", exc)
         fallback = answer_generator.extractive(question, generation_context)
         generation = type("Fallback", (), {"answer": fallback, "provider": "extractive-fallback", "model": None,
                                             "latency_ms": 0.0, "used_llm": False})()
-        warnings.append("LLM generation was unavailable; an extractive grounded answer was used.")
+        warnings.append("The model could not answer; no relevant document evidence was available." if general_knowledge
+                        else "LLM generation was unavailable; an extractive grounded answer was used.")
     grounded, citation_verification = _grounded_status(generation.answer, citations, context,
                                                         used_llm=generation.used_llm)
-    return QueryResponse(answer=generation.answer, grounded=grounded, confidence=confidence, knowledge_gap=False,
+    return QueryResponse(answer=generation.answer, grounded=grounded, confidence=confidence, knowledge_gap=general_knowledge,
                          citations=citations, warnings=list(dict.fromkeys(warnings)), context=context,
                          count=len(context), generation={"provider": generation.provider, "model": generation.model,
                                                          "latency_ms": generation.latency_ms, "used_llm": generation.used_llm,
@@ -798,12 +809,17 @@ def _stream_query(payload: QueryRequest, request: Request) -> Iterator[str]:
     """Yield SSE events for a streaming query: deltas, then a final done event."""
     workspace_id = getattr(request.state, "workspace_id", None)
     question = kb.augment_with_history(payload.session_id, payload.question)
-    chunks, trace = kb.query_with_trace(question, top_k=payload.top_k, min_score=payload.min_score,
-                                        retrieval=payload.retrieval, embedding_model=payload.embedding_model,
-                                        embedding_provider=payload.embedding_provider,
-                                        local_dimensions=payload.local_dimensions, reranker=payload.reranker,
-                                        candidate_pool_size=payload.candidate_pool_size,
-                                        metadata_filter=payload.metadata_filter, workspace_id=workspace_id)
+    try:
+        chunks, trace = kb.query_with_trace(question, top_k=payload.top_k, min_score=payload.min_score,
+                                            retrieval=payload.retrieval, embedding_model=payload.embedding_model,
+                                            embedding_provider=payload.embedding_provider,
+                                            local_dimensions=payload.local_dimensions, reranker=payload.reranker,
+                                            candidate_pool_size=payload.candidate_pool_size,
+                                            metadata_filter=payload.metadata_filter, workspace_id=workspace_id)
+    except Exception:
+        logger.exception("RAG retrieval failed while streaming a query.")
+        yield _sse_event({"type": "error", "message": "Document search failed. Please retry your question."})
+        return
     chunks = _trim_context(_dedup_context(chunks), payload.context_max_tokens)
 
     if not payload.generate or not answer_generator.enabled:
@@ -817,16 +833,23 @@ def _stream_query(payload: QueryRequest, request: Request) -> Iterator[str]:
         knowledge_gap = True
         warnings.append("Evidence confidence is low; the assistant will avoid unsupported claims.")
 
-    if knowledge_gap:
+    if knowledge_gap and not answer_generator.enabled:
         response = _build_response(question, chunks, trace, payload)
         yield _sse_event({"type": "done", "response": response.model_dump()})
         return
 
-    context = [ContextChunk(source_id=c.source_id, chunk_index=c.chunk_index, text=_strip_page_markers(c.text),
-                            score=round(c.score, 4), metadata=c.metadata) for c in chunks]
-    citations = _source_citations(chunks)
-    generation_context = [{"source_id": c.source_id, "chunk_index": c.chunk_index, "text": c.text,
-                           "metadata": c.metadata} for c in chunks]
+    general_knowledge = knowledge_gap
+    if general_knowledge:
+        warnings.append("No relevant document evidence was found; this answer uses general model knowledge.")
+        context = []
+        citations = []
+        generation_context = []
+    else:
+        context = [ContextChunk(source_id=c.source_id, chunk_index=c.chunk_index, text=_strip_page_markers(c.text),
+                                score=round(c.score, 4), metadata=c.metadata) for c in chunks]
+        citations = _source_citations(chunks)
+        generation_context = [{"source_id": c.source_id, "chunk_index": c.chunk_index, "text": c.text,
+                               "metadata": c.metadata} for c in chunks]
     deltas: list[str] = []
     used_llm = False
     try:
@@ -836,11 +859,19 @@ def _stream_query(payload: QueryRequest, request: Request) -> Iterator[str]:
                 yield _sse_event({"type": "delta", "text": delta})
         used_llm = True
     except LLMError as exc:
-        logger.warning("LLM stream failed; using extractive fallback: %s", exc)
-    answer = "".join(deltas) if used_llm else answer_generator.extractive(question, generation_context)
+        cause = exc.__cause__
+        logger.warning("LLM stream failed (provider=%s model=%s cause=%s); using fallback: %s",
+                       answer_generator.provider, answer_generator.model,
+                       str(cause)[:300] if cause else "unknown", exc)
+        if general_knowledge:
+            warnings.append("The model could not answer; no relevant document evidence was available.")
+        answer = "".join(deltas) if used_llm else answer_generator.extractive(question, generation_context)
+    if not answer.strip():
+        answer = ("I couldn't get a response from the model just now. Please try again." if not general_knowledge
+                  else "I couldn't get a response from the model just now, and no relevant document evidence was found.")
     grounded, citation_verification = _grounded_status(answer, citations, context, used_llm=used_llm)
     response = QueryResponse(
-        answer=answer, grounded=grounded, confidence=confidence, knowledge_gap=False,
+        answer=answer, grounded=grounded, confidence=confidence, knowledge_gap=general_knowledge,
         citations=citations, warnings=list(dict.fromkeys(warnings)), context=context, count=len(context),
         generation={"provider": answer_generator.provider, "model": answer_generator.model,
                     "used_llm": used_llm, "citation_verification": citation_verification},

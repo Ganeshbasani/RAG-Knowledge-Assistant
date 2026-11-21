@@ -99,9 +99,15 @@ async function ask(){
     if(!response.ok){const error=await response.json().catch(()=>({}));throw Error(error.detail||error.message||'Request failed ('+response.status+')')}
     if(!response.body)throw Error('The server did not return a response stream.');
     const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='',final=null;
-    for(;;){const{done,value}=await reader.read();if(done)break;buffer+=decoder.decode(value,{stream:true});const lines=buffer.split('\n');buffer=lines.pop()||'';for(const line of lines){if(!line.startsWith('data:'))continue;let event;try{event=JSON.parse(line.slice(5).trim())}catch{continue}if(event.type==='delta'){answer+=event.text;pending.querySelector('.answer').textContent=answer;$('feed').scrollTop=$('feed').scrollHeight}else if(event.type==='done')final=event.response}}
+    for(;;){const{done,value}=await reader.read();if(done)break;buffer+=decoder.decode(value,{stream:true});const lines=buffer.split('\n');buffer=lines.pop()||'';for(const line of lines){if(!line.startsWith('data:'))continue;let event;try{event=JSON.parse(line.slice(5).trim())}catch{continue}if(event.type==='delta'){answer+=event.text;pending.querySelector('.answer').textContent=answer;$('feed').scrollTop=$('feed').scrollHeight}else if(event.type==='done')final=event.response;else if(event.type==='error')throw Error(event.message||'Document search failed. Please retry.')}}
     buffer+=decoder.decode();if(buffer.startsWith('data:')){try{const event=JSON.parse(buffer.slice(5).trim());if(event.type==='done')final=event.response}catch{}}
-    pending.remove();pending=null;if(final)addTurn('assistant',final.answer,final);else addTurn('assistant',answer||'No answer was returned.');setLive(idleStatus());
+    if(!final||!String(final.answer||'').trim()){
+      setLive('Recovering response');
+      const recovery=await fetch('/query',{method:'POST',headers:headers(true),body:JSON.stringify({...payload,stream:false}),signal:state.abortController.signal});
+      if(!recovery.ok){const error=await recovery.json().catch(()=>({}));throw Error(error.detail||error.message||'Request failed ('+recovery.status+')')}
+      final=await recovery.json();
+    }
+    pending.remove();pending=null;if(final?.answer?.trim())addTurn('assistant',final.answer,final);else addTurn('assistant',answer||'The response ended before Atlas received an answer. Please try again.');setLive(idleStatus());
   }catch(error){
     if(pending){pending.remove();pending=null}
     if(state.abortController?.signal.aborted){if(submitted&&answer)addTurn('assistant',answer);else if(!submitted){state.attachments.forEach(item=>{if(item.state==='indexing')item.state='queued'});renderAttachments()}setLive(submitted?'Response stopped':'Sending stopped');if(!submitted)showToast('Stopped. Your message and attachments are still here.')}

@@ -116,6 +116,15 @@ def _parse_rewrite_answer(answer: str, question: str, max_variants: int) -> list
 
 
 def _build_messages(question: str, context: list[dict[str, Any]], citations: list[dict[str, Any]]) -> tuple[str, str]:
+    if not context:
+        return (
+            "You are Atlas, a helpful general-purpose assistant. No relevant indexed document evidence "
+            "was found for this question. Answer general questions using your model knowledge, be clear "
+            "about uncertainty, and never claim that you read or verified information in the user's files. "
+            "If the question specifically depends on those files, say that no relevant document evidence "
+            "was found and ask what the user would like to know about them.",
+            f"Question:\n{question}\n\nAnswer helpfully and concisely.",
+        )
     citation_text = "\n".join(
         f"[{idx}] {item['source_id']} — chunk {item['chunk_index']}" for idx, item in enumerate(citations, start=1)
     )
@@ -525,11 +534,6 @@ class AnswerGenerator:
     def generate(self, question: str, context: list[dict[str, Any]],
                  citations: list[dict[str, Any]]) -> GenerationResult:
         started = time.perf_counter()
-        if not context:
-            return GenerationResult(
-                answer="I couldn't find sufficient evidence in the indexed documents to answer this question.",
-                provider="none", model=None, latency_ms=0.0, used_llm=False,
-            )
         if not self.enabled or self._adapter is None:
             return GenerationResult(
                 answer=extractive_fallback(question, context),
@@ -552,7 +556,13 @@ class AnswerGenerator:
         if not self.enabled or self._adapter is None:
             yield extractive_fallback(question, context)
             return
-        yield from self._adapter.generate_stream(question, context, citations)
+        yielded = False
+        for delta in self._adapter.generate_stream(question, context, citations):
+            if delta:
+                yielded = True
+                yield delta
+        if not yielded:
+            raise LLMError("LLM provider returned an empty streamed answer.")
 
     @staticmethod
     def extractive(question: str, context: list[dict[str, Any]], max_sentences: int = 4) -> str:
