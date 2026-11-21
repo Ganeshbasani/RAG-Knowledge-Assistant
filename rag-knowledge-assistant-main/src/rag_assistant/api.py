@@ -131,7 +131,13 @@ app = FastAPI(
 )
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
-_UI_DIR = _PROJECT_ROOT / "ui"
+_UI_CANDIDATES = (
+    _PROJECT_ROOT / "ui",
+    Path.cwd() / "ui",
+    Path.cwd() / "rag-knowledge-assistant-main" / "ui",
+)
+_UI_DIR = next((candidate.resolve() for candidate in _UI_CANDIDATES if candidate.is_dir()),
+               _PROJECT_ROOT / "ui")
 if _UI_DIR.is_dir():
     app.mount("/ui", StaticFiles(directory=str(_UI_DIR), html=True), name="ui")
 
