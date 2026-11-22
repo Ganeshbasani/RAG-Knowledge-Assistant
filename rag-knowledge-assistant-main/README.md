@@ -9,7 +9,7 @@ A production-style RAG application for document-grounded Q&A. Users upload docum
 - Keyword, semantic, and hybrid retrieval
 - Reciprocal Rank Fusion (RRF)
 - Lightweight reranking
-- Grounded LLM generation through Gemini or an OpenAI-compatible endpoint
+- Grounded LLM generation through OpenRouter, Gemini, or another OpenAI-compatible endpoint
 - Safe extractive fallback when no LLM key is configured
 - Inline source citations and retrieved evidence
 - Confidence-aware no-answer / knowledge-gap handling
@@ -91,20 +91,20 @@ Then choose `sentence_transformers` as the embedding provider and configure `RAG
 
 ## Enable LLM generation
 
-The hosted portfolio setup uses Gemini. Set `RAG_LLM_PROVIDER=gemini`, `RAG_LLM_MODEL=gemini-3.7-flash`, and the server-side `GEMINI_API_KEY`; visitors never provide or see the key. Without a key, the app remains usable with a local extractive fallback.
+The hosted portfolio setup uses OpenRouter's free-model router by default. Set `RAG_LLM_PROVIDER=openrouter`, `RAG_LLM_MODEL=openrouter/free`, `RAG_LLM_BASE_URL=https://openrouter.ai/api/v1/chat/completions`, and the server-side `OPENROUTER_API_KEY`; visitors never provide or see the key. If the provider key is missing, the UI shows that OpenRouter needs setup and the app retains its local extractive fallback.
 
-For an OpenAI-compatible provider instead:
+For another OpenAI-compatible provider instead:
 
 ```env
 RAG_LLM_PROVIDER=openai_compatible
 RAG_LLM_API_KEY=your-key
-RAG_LLM_MODEL=gpt-6.2-astra
-RAG_LLM_BASE_URL=https://api.openai.com/v1/chat/completions
+RAG_LLM_MODEL=provider/model-id
+RAG_LLM_BASE_URL=https://provider.example/v1/chat/completions
 ```
 
-You may point `RAG_LLM_BASE_URL` to another compatible provider. ChatGPT subscriptions and API billing are separate; API usage is billed to the OpenAI API project whose key the server uses. See [OpenAI production best practices](https://developers.openai.com/api/docs/guides/production-best-practices).
+For Gemini, set `RAG_LLM_PROVIDER=gemini`, `RAG_LLM_MODEL=gemini-3.7-flash`, and `GEMINI_API_KEY`. Provider keys stay on the server and are never sent to the browser.
 
-This setup keeps document upload, indexing, retrieval, and citations in this application and sends only the retrieved context and question to OpenAI for answer generation. To let OpenAI host document search instead, use the [OpenAI File Search tool](https://developers.openai.com/api/docs/guides/tools-file-search); that changes where files are stored and how retrieval is managed.
+This setup keeps document upload, indexing, retrieval, and citations in this application and sends only the retrieved context and question to the configured provider for answer generation. To let OpenAI host document search instead, use the [OpenAI File Search tool](https://developers.openai.com/api/docs/guides/tools-file-search); that changes where files are stored and how retrieval is managed.
 
 ## Example query
 
@@ -166,11 +166,11 @@ The script upserts chunks + vectors, then verifies counts and that every migrate
 
 ## Generation & interaction (Phase 2)
 
-- **Hosted demo model:** Gemini (`gemini-3.7-flash`) is configured server-side. Add `GEMINI_API_KEY` in Render's Environment page; visitors never provide or see the key. Without it, Atlas uses its local extractive fallback. Gemini's free tier has quotas and provider-specific data terms; use public, non-sensitive demo documents only.
+- **Hosted demo model:** OpenRouter's `openrouter/free` router is configured server-side. Add `OPENROUTER_API_KEY` in Render's Environment page and set `RAG_LLM_PROVIDER=openrouter`, `RAG_LLM_MODEL=openrouter/free`, and `RAG_LLM_BASE_URL=https://openrouter.ai/api/v1/chat/completions`. Visitors never provide or see the key. If the provider key is missing, Atlas uses its local extractive fallback. Free-model availability and limits can change; use public, non-sensitive demo documents only.
 - **Free hosting limits:** the Render free service sleeps after inactivity and uses ephemeral disk storage. Uploaded files and the search index may disappear after a restart or redeploy. This setup is suitable for a portfolio demonstration, not a persistent production workspace.
 
 - **Streaming answers:** `POST /query` with `"stream": true` → `text/event-stream` (`delta` events + a final `done` event with the full response). The UI appends tokens to the pending message in real time.
-- **Provider adapters:** `RAG_LLM_PROVIDER` defaults to `openai_compatible` with `gpt-6.2-astra` at high reasoning effort for stronger answer quality; supported alternatives include `anthropic`, `gemini`, and `ollama`. Retries with exponential backoff on 429/5xx (3 attempts); optional `RAG_LLM_MAX_OUTPUT_TOKENS` cap.
+- **Provider adapters:** `RAG_LLM_PROVIDER` defaults to `openrouter` with the `openrouter/free` model router; supported alternatives include `openai_compatible`, `anthropic`, `gemini`, and `ollama`. Retries with exponential backoff on 429/5xx (3 attempts); optional `RAG_LLM_MAX_OUTPUT_TOKENS` cap.
 - **Conversational memory:** `session_id` on `/query` — history (last 10 turns) is injected into the question for retrieval/generation; `GET /sessions` + `DELETE /sessions/{id}` for management.
 - **Query rewriting:** LLM-based variants (or rule-based fallback without a key); hybrid runs multi-query retrieval, merged via the existing RRF.
 - **Context assembly:** `context_max_tokens` budget, near-duplicate collapse, `[PAGE n]` markers stripped from context text.

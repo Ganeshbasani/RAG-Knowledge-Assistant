@@ -14,14 +14,16 @@ services:
       - key: RAG_UPLOAD_DIR
         value: /app/data/uploads
       - key: RAG_LLM_PROVIDER
-        value: gemini
+        value: openrouter
       - key: RAG_LLM_MODEL
-        value: gemini-3.7-flash
+        value: openrouter/free
+      - key: RAG_LLM_BASE_URL
+        value: https://openrouter.ai/api/v1/chat/completions
       - key: RAG_RATE_LIMIT_REQUESTS
         value: "12"
       - key: RAG_RATE_LIMIT_WINDOW_SECONDS
         value: "60"
       - key: RAG_MAX_REQUEST_BYTES
         value: "5242880"
-      - key: GEMINI_API_KEY
+      - key: OPENROUTER_API_KEY
         sync: false

@@ -649,7 +649,8 @@ def health() -> dict:
     data = kb.health()
     data.update({"service": app_config.service_name, "version": __version__,
                  "uptime_seconds": round(time.time() - _START_TIME, 2),
-                 "llm_provider": app_config.llm_provider, "llm_enabled": answer_generator.enabled})
+                 "llm_provider": answer_generator.provider, "llm_model": answer_generator.model,
+                 "llm_enabled": answer_generator.enabled})
     return data
 
 

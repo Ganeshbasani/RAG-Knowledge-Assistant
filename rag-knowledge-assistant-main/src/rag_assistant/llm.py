@@ -179,8 +179,6 @@ class OpenAICompatibleAdapter:
     def _messages_payload(self, system: str, user: str) -> dict[str, Any]:
         return {
             "model": self.model,
-            # GPT-6 models use reasoning_effort and reject temperature overrides.
-            "reasoning_effort": "high",
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
         }
 
@@ -511,7 +509,7 @@ class AnswerGenerator:
             return None
         if not api_key and normalized != "ollama":
             return None
-        if normalized in {"openai", "openai_compatible", "openai_compat", "vllm", "triton", "remote", "custom"}:
+        if normalized in {"openrouter", "openai", "openai_compatible", "openai_compat", "vllm", "triton", "remote", "custom"}:
             return OpenAICompatibleAdapter(model_name, api_key, base_url, self.timeout_seconds,
                                            self.max_output_tokens)
         if normalized == "anthropic":

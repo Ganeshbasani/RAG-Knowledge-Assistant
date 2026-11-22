@@ -90,10 +90,10 @@ class AppConfig:
     jwt_issuer: str = "rag-knowledge-assistant"
     workspace_default: str = "default"
 
-    llm_provider: str = "gemini"
-    llm_model: str = "gemini-3.7-flash"
+    llm_provider: str = "openrouter"
+    llm_model: str = "openrouter/free"
     llm_api_key: str | None = None
-    llm_base_url: str = "https://api.openai.com/v1/chat/completions"
+    llm_base_url: str = "https://openrouter.ai/api/v1/chat/completions"
     llm_timeout_seconds: int = 30
 
     log_level: str = "INFO"
@@ -103,13 +103,21 @@ class AppConfig:
 
     @classmethod
     def from_env(cls) -> AppConfig:
-        llm_provider = (_env("RAG_LLM_PROVIDER", "gemini") or "gemini").strip().lower()
+        llm_provider = (_env("RAG_LLM_PROVIDER", "openrouter") or "openrouter").strip().lower()
         if llm_provider == "gemini":
             # Keep Google credentials separate so an old OpenAI key is never
             # accidentally sent to Google's endpoint.
             llm_api_key = _env("GEMINI_API_KEY")
+        elif llm_provider == "openrouter":
+            # Accept the provider-native name and the application's generic secret name.
+            llm_api_key = _env("OPENROUTER_API_KEY") or _env("RAG_LLM_API_KEY")
         else:
             llm_api_key = _env("RAG_LLM_API_KEY") or _env("OPENAI_API_KEY")
+        default_llm_model = "openrouter/free" if llm_provider == "openrouter" else "gemini-3.7-flash"
+        default_llm_base_url = (
+            "https://openrouter.ai/api/v1/chat/completions"
+            if llm_provider == "openrouter" else "https://api.openai.com/v1/chat/completions"
+        )
         return cls(
             service_name=_env("RAG_SERVICE_NAME", "rag-knowledge-assistant"),
             api_key=_env("RAG_API_KEY"),
@@ -139,9 +147,9 @@ class AppConfig:
             jwt_issuer=_env("RAG_JWT_ISSUER", "rag-knowledge-assistant") or "rag-knowledge-assistant",
             workspace_default=_env("RAG_WORKSPACE_DEFAULT", "default") or "default",
             llm_provider=llm_provider,
-            llm_model=_env("RAG_LLM_MODEL", "gemini-3.7-flash") or "gemini-3.7-flash",
+            llm_model=_env("RAG_LLM_MODEL", default_llm_model) or default_llm_model,
             llm_api_key=llm_api_key,
-            llm_base_url=_env("RAG_LLM_BASE_URL", "https://api.openai.com/v1/chat/completions") or "https://api.openai.com/v1/chat/completions",
+            llm_base_url=_env("RAG_LLM_BASE_URL", default_llm_base_url) or default_llm_base_url,
             llm_timeout_seconds=_env_int("RAG_LLM_TIMEOUT_SECONDS", 30),
             log_level=_env("RAG_LOG_LEVEL", "INFO") or "INFO",
             docs_enabled=_env_bool("RAG_DOCS_ENABLED", True),
