@@ -1,150 +1,378 @@
+
 <p align="center">
-  <img src="assets/rag-hero.gif" alt="Animated TrustAware RAG Knowledge Assistant hero" width="100%">
+  <img src="assets/rag-hero.gif" alt="TrustAware RAG Knowledge Assistant" width="100%">
 </p>
 
 <h1 align="center">TrustAware RAG Knowledge Assistant</h1>
-<p align="center"><b>Document-grounded question answering with hybrid retrieval, citations and confidence-aware knowledge-gap handling.</b></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white">
-  <img src="https://img.shields.io/badge/API-FastAPI-009688?logo=fastapi&logoColor=white">
-  <img src="https://img.shields.io/badge/Deployment-Docker-2496ED?logo=docker&logoColor=white">
+  <b>Intelligent Document-Grounded AI | Hybrid Retrieval | Verified Citations | Trust-Aware Responses</b>
+</p>
+
+<p align="center">
+  <a href="https://rag-knowledge-assistant-2-eabe.onrender.com/ui/">
+    <img src="https://img.shields.io/badge/LIVE_DEMO-Open_Application-success?style=for-the-badge&logo=render" alt="Live Demo">
+  </a>
+  <a href="https://github.com/Ganeshbasani/RAG-Knowledge-Assistant">
+    <img src="https://img.shields.io/badge/GitHub-Repository-black?style=for-the-badge&logo=github" alt="GitHub">
+  </a>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white">
+  <img src="https://img.shields.io/badge/API-FastAPI-009688?logo=fastapi">
+  <img src="https://img.shields.io/badge/Retrieval-Hybrid%20RAG-blueviolet">
+  <img src="https://img.shields.io/badge/Deployment-Docker-2496ED?logo=docker">
   <img src="https://img.shields.io/badge/License-MIT-green">
 </p>
 
-## Project overview
+---
 
-TrustAware RAG Knowledge Assistant is a Retrieval-Augmented Generation application. Users upload knowledge sources, ask natural-language questions, and receive responses grounded in retrieved document evidence. The system combines lexical and semantic retrieval, Reciprocal Rank Fusion (RRF), reranking, evidence checks, source citations and knowledge-gap handling.
+## 🚀 Live Application
 
-**Repository:** https://github.com/Ganeshbasani/RAG-Knowledge-Assistant  
-**Live demo:** Add the verified deployment URL here. A live URL was not available in the repository review context, so none is fabricated.
+<p align="center">
+  <a href="https://rag-knowledge-assistant-2-eabe.onrender.com/ui/">
+    <img src="https://img.shields.io/badge/LAUNCH_RAG_KNOWLEDGE_ASSISTANT-Click_Here-00C853?style=for-the-badge" alt="Launch Application">
+  </a>
+</p>
 
-## Key capabilities
+**Live URL:** https://rag-knowledge-assistant-2-eabe.onrender.com/ui/
 
-- **Multi-format ingestion:** PDF, DOCX, PPTX, XLSX, CSV/TSV, JSON, HTML, RTF, TXT, Markdown and common image formats with OCR.
-- **Hybrid retrieval:** keyword/BM25 and semantic retrieval modes.
-- **Ranking:** Reciprocal Rank Fusion and configurable lightweight reranking.
-- **Grounded generation:** LLM answers generated from retrieved evidence, with source citations.
-- **Knowledge-gap handling:** insufficient evidence can trigger a no-answer response rather than unsupported claims.
-- **Trust diagnostics:** citation verification and potentially outdated/conflicting-source warnings.
-- **Chat experience:** responsive interface, conversation history, chat search, rename/delete, Markdown export and streaming.
-- **Evaluation:** curated answerable, unanswerable, adversarial and conflict cases; Recall@K, NDCG, abstention accuracy and citation precision.
+**Repository:** https://github.com/Ganeshbasani/RAG-Knowledge-Assistant
 
-## Screenshots
+---
 
-The original repository already contains four application captures. Keep these files in the `Screenshots/` directory and rename them to the descriptive names below if you choose to normalize the folder. The README references the current original filenames until those renames are made.
+## 📌 Project Overview
 
-| Capture | Existing image |
-|---|---|
-| Application view 01 | `Screenshots/Screenshot 2026-11-23 010347.png` |
-| Application view 02 | `Screenshots/Screenshot 2026-11-23 010354.png` |
-| Application view 03 | `Screenshots/Screenshot 2026-11-23 010842.png` |
-| Application view 04 | `Screenshots/Screenshot 2026-11-23 010917.png` |
+TrustAware RAG Knowledge Assistant is an intelligent Retrieval-Augmented Generation (RAG) application that enables users to upload documents, ask natural-language questions, and receive answers grounded in retrieved document evidence.
 
-## Architecture
+Unlike ordinary AI chatbots, this application combines lexical and semantic retrieval, Reciprocal Rank Fusion (RRF), reranking, evidence validation, source citations, and knowledge-gap handling to improve answer reliability.
+
+The system is designed to reduce hallucinations by prioritizing document-grounded responses and handling questions when sufficient evidence is unavailable.
+
+## ✨ Key Features
+
+### 📂 Multi-Format Document Ingestion
+- PDF
+- DOCX
+- PPTX
+- XLSX
+- CSV / TSV
+- JSON
+- HTML
+- RTF
+- TXT
+- Markdown
+- Common image formats with OCR support
+
+### 🧠 Advanced Hybrid Retrieval
+- Keyword-based retrieval
+- BM25 / lexical search
+- Semantic vector retrieval
+- Hybrid retrieval strategies
+- Reciprocal Rank Fusion (RRF)
+- Configurable reranking
+
+### 🎯 Trust-Aware AI Responses
+- Document-grounded answer generation
+- Source-level citations
+- Citation verification
+- Evidence sufficiency checks
+- Knowledge-gap detection
+- No-answer responses when evidence is insufficient
+- Potentially outdated and conflicting-source warnings
+
+### 💬 Intelligent Chat Interface
+- Responsive user interface
+- Conversation history
+- Chat search
+- Rename and delete conversations
+- Markdown export
+- Streaming responses
+
+### 📊 Evaluation and Quality
+- Answerable question evaluation
+- Unanswerable question evaluation
+- Adversarial test cases
+- Conflicting-source evaluation
+- Recall@K
+- NDCG
+- Abstention accuracy
+- Citation precision
+
+---
+
+## 🖥️ Application Screenshots
+
+<p align="center">
+  <b>01 — Main Application Interface</b>
+</p>
+
+<p align="center">
+  <img src="Screenshots/Screenshot%202026-11-23%20010347.png" width="100%" alt="TrustAware RAG Main Application Interface">
+</p>
+
+<p align="center">
+  <b>02 — Document Processing and Knowledge Ingestion</b>
+</p>
+
+<p align="center">
+  <img src="Screenshots/Screenshot%202026-11-23%20010354.png" width="100%" alt="Document Processing Interface">
+</p>
+
+<p align="center">
+  <b>03 — AI-Powered Question Answering</b>
+</p>
+
+<p align="center">
+  <img src="Screenshots/Screenshot%202026-11-23%20010842.png" width="100%" alt="AI Question Answering Interface">
+</p>
+
+<p align="center">
+  <b>04 — Grounded Responses and Citations</b>
+</p>
+
+<p align="center">
+  <img src="Screenshots/Screenshot%202026-11-23%20010917.png" width="100%" alt="Grounded Responses and Source Citations">
+</p>
+
+---
+
+## 🏗️ System Architecture
 
 ```mermaid
-flowchart LR
-    A[Documents] --> B[Parsing and normalization]
-    B --> C[Chunking and metadata]
-    C --> D[Lexical and semantic retrieval]
-    D --> E[Reciprocal Rank Fusion]
-    E --> F[Reranking]
-    F --> G{Evidence sufficient?}
-    G -->|Yes| H[LLM answer generation]
-    H --> I[Citation verification]
-    I --> J[Grounded answer]
-    G -->|No| K[Knowledge-gap response]
+flowchart TD
+    A[Document Upload] --> B[Document Parsing]
+    B --> C[Text Normalization]
+    C --> D[Chunking and Metadata]
+    D --> E[Lexical Retrieval]
+    D --> F[Semantic Retrieval]
+    E --> G[Reciprocal Rank Fusion]
+    F --> G
+    G --> H[Reranking]
+    H --> I{Evidence Sufficient?}
+    I -->|Yes| J[LLM Answer Generation]
+    J --> K[Citation Verification]
+    K --> L[Grounded AI Response]
+    I -->|No| M[Knowledge Gap Response]
 ```
 
-## Technology stack
+## 🛠️ Technology Stack
 
 | Layer | Technologies |
 |---|---|
-| Backend | Python, FastAPI, Pydantic, Uvicorn |
-| Retrieval | BM25/lexical search, semantic embeddings, hybrid retrieval, RRF |
-| Reranking | Term-overlap; optional cross-encoder |
-| LLM adapters | OpenRouter, Gemini, OpenAI-compatible endpoints, Anthropic and Ollama (configuration-dependent) |
-| Vector storage | Embedded JSON index by default; optional Qdrant |
-| Metadata | SQLite by default; optional PostgreSQL |
-| Frontend | Responsive HTML, CSS and JavaScript |
-| Delivery | Docker, Docker Compose, Render configuration |
-| Quality | Automated tests and retrieval evaluation harness |
+| Programming | Python |
+| Backend | FastAPI, Pydantic, Uvicorn |
+| Frontend | HTML, CSS, JavaScript |
+| Retrieval | BM25, Semantic Search, Hybrid Retrieval |
+| Ranking | Reciprocal Rank Fusion, Reranking |
+| AI / LLM | OpenRouter, Gemini, OpenAI-compatible endpoints, Anthropic, Ollama (configuration-dependent) |
+| Vector Storage | JSON index, optional Qdrant |
+| Database | SQLite, optional PostgreSQL |
+| Deployment | Docker, Docker Compose, Render |
+| Evaluation | Retrieval evaluation and automated tests |
 
-## Quick start
+## 🔄 How It Works
+
+1. **Upload:** Users upload knowledge sources in supported formats.
+2. **Parsing:** Documents are parsed and normalized.
+3. **Chunking:** Extracted content is divided into manageable chunks with metadata.
+4. **Retrieval:** The system searches using lexical and semantic retrieval.
+5. **Fusion:** Reciprocal Rank Fusion combines relevant results.
+6. **Reranking:** Retrieved passages are reordered by relevance.
+7. **Evidence Validation:** The system evaluates whether sufficient evidence exists.
+8. **Generation:** The LLM generates a document-grounded response.
+9. **Citation Verification:** Sources are checked to support the generated answer.
+10. **Response:** The application returns an answer or an appropriate knowledge-gap response.
+
+---
+
+## ⚙️ Installation and Local Setup
+
+### 1. Clone Repository
 
 ```bash
 git clone https://github.com/Ganeshbasani/RAG-Knowledge-Assistant.git
+
 cd RAG-Knowledge-Assistant/rag-knowledge-assistant-main
+```
+
+### 2. Create Virtual Environment
+
+```bash
 python -m venv .venv
 ```
 
-Windows PowerShell:
+### 3. Activate Environment
+
+**Windows PowerShell:**
+
 ```powershell
-.\\.venv\\Scripts\\Activate.ps1
+.\.venv\Scripts\Activate.ps1
+```
+
+**macOS / Linux:**
+
+```bash
+source .venv/bin/activate
+```
+
+### 4. Install Dependencies
+
+```bash
 pip install -e ".[dev]"
+```
+
+### 5. Configure Environment
+
+**Windows:**
+
+```powershell
 Copy-Item .env.example .env
 ```
 
-macOS / Linux:
+**macOS / Linux:**
+
 ```bash
-source .venv/bin/activate
-pip install -e ".[dev]"
 cp .env.example .env
 ```
 
-Start the application:
+Configure the required provider credentials and application settings in `.env` as applicable.
+
+### 6. Run Application
+
 ```bash
 rag-knowledge-assistant
 ```
 
-Or:
+Alternatively:
+
 ```bash
 uvicorn rag_assistant.api:app --reload --app-dir src
 ```
 
-Open `http://127.0.0.1:8000/ui/`.
+### 7. Open Application
 
-## API overview
+```text
+http://127.0.0.1:8000/ui/
+```
 
-| Method | Endpoint | Purpose |
+---
+
+## 🔌 API Endpoints
+
+| Method | Endpoint | Description |
 |---|---|---|
-| GET | `/health` | Liveness |
+| GET | `/health` | Application liveness |
 | GET | `/ready` | Readiness and storage probe |
 | GET | `/stats` | Index statistics |
-| GET | `/documents` | List documents |
+| GET | `/documents` | List ingested documents |
 | POST | `/ingest` | Ingest raw text |
 | POST | `/ingest/file` | Upload and ingest a file |
-| POST | `/ingest/bulk` | Bulk ingestion |
-| POST | `/query` | Grounded Q&A; optional SSE streaming |
+| POST | `/ingest/bulk` | Bulk document ingestion |
+| POST | `/query` | Grounded question answering |
 | POST | `/query/semantic` | Semantic-only retrieval |
-| POST | `/evals/run` | Run retrieval evaluation |
+| POST | `/evals/run` | Run retrieval evaluations |
 | GET | `/metrics` | Runtime metrics |
 
-## Security and deployment notes
+---
 
-- API-key authentication is optional for local use and required by the documented production configuration.
-- Provider API keys must remain server-side and must never be committed.
-- Request IDs, safe errors, rate limiting and upload-size controls are documented.
-- The free Render configuration may sleep and uses ephemeral storage. Treat it as a portfolio demo, not a persistent production workspace.
-- The default JSON vector index is intended for a small single-instance deployment. Multi-instance production requires shared durable storage.
+## 🔐 Security and Reliability
 
-## Suggested recruiter walkthrough
+- Optional API-key authentication for local use.
+- Production API-key configuration.
+- Server-side provider API key handling.
+- Request ID tracking.
+- Safe error responses.
+- Rate limiting.
+- Upload-size controls.
+- Readiness and health endpoints.
+- Deployment configuration for Docker and Render.
 
-1. Upload a small, non-sensitive document.
-2. Ask a question whose answer is explicitly present in that document.
-3. Inspect the generated answer and its citations.
-4. Ask an unrelated question to demonstrate knowledge-gap behavior.
-5. Review `/health` and the evaluation fixtures.
+**Deployment consideration:** The free Render configuration may sleep and uses ephemeral storage. The default JSON vector index is intended for small, single-instance deployments. Persistent shared storage and horizontal scaling require suitable infrastructure.
 
-## Resume-ready summary
+---
 
-> Built a trust-aware Retrieval-Augmented Generation application using Python and FastAPI, featuring multi-format document ingestion, hybrid lexical and semantic retrieval, Reciprocal Rank Fusion, reranking, evidence-grounded LLM responses, source citations, confidence-aware knowledge-gap handling, API security controls, Docker deployment configuration and retrieval evaluation.
+## 🧪 Suggested Demo Walkthrough
 
-## Scope transparency
+Recruiters and reviewers can explore the application using the following steps:
 
-Optional providers and storage backends require configuration and should not be assumed active in every deployment. This README describes capabilities documented in the repository. The default JSON vector index is a small single-instance design; shared persistence and horizontal scaling require an appropriate shared backend.
+1. Open the live application.
+2. Upload a sample PDF or other supported document.
+3. Ask a question whose answer exists in the uploaded document.
+4. Review the generated answer and source citations.
+5. Ask an unrelated question to test knowledge-gap handling.
+6. Inspect the health endpoint and evaluation capabilities.
 
-## License
+**Live Demo:** https://rag-knowledge-assistant-2-eabe.onrender.com/ui/
 
-MIT — see [LICENSE](LICENSE).
+---
+
+## 💼 Resume-Ready Project Description
+
+Built a TrustAware Retrieval-Augmented Generation application using Python and FastAPI, implementing multi-format document ingestion, hybrid lexical and semantic retrieval, Reciprocal Rank Fusion, reranking, evidence-grounded LLM responses, source citations, confidence-aware knowledge-gap handling, API security controls, Docker deployment configuration, and retrieval evaluation.
+
+## 📁 Repository Structure
+
+```text
+RAG-Knowledge-Assistant/
+│
+├── README.md
+├── assets/
+│   └── rag-hero.gif
+│
+├── Screenshots/
+│   ├── Screenshot 2026-11-23 010347.png
+│   ├── Screenshot 2026-11-23 010354.png
+│   ├── Screenshot 2026-11-23 010842.png
+│   └── Screenshot 2026-11-23 010917.png
+│
+├── rag-knowledge-assistant-main/
+│   ├── src/
+│   ├── tests/
+│   ├── evals/
+│   ├── docs/
+│   ├── .env.example
+│   ├── pyproject.toml
+│   └── Dockerfile
+│
+└── LICENSE
+```
+
+*Illustrative structure: actual repository contents may include additional files and directories.*
+
+---
+
+## 🔭 Future Improvements
+
+Potential areas for further development:
+
+- Advanced retrieval optimization.
+- Improved confidence calibration.
+- Expanded evaluation and CI quality gates.
+- Enhanced observability.
+- Improved resilience and fault handling.
+- Additional storage and LLM provider integrations.
+
+---
+
+## 📜 License
+
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+
+---
+
+## 👨‍💻 Developer
+
+**Ganesh Basani**
+
+- GitHub: https://github.com/Ganeshbasani
+- Portfolio: https://protfolio4.netlify.app/
+
+<p align="center">
+  <b>Built with Python, FastAPI, Retrieval-Augmented Generation and a focus on trustworthy AI.</b>
+</p>
+
+<p align="center">
+  ⭐ If you find this project interesting, consider starring the repository!
+</p>
