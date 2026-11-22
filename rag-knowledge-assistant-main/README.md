@@ -1,268 +1,150 @@
-# TrustAware RAG Knowledge Assistant
+<p align="center">
+  <img src="assets/rag-hero.gif" alt="Animated TrustAware RAG Knowledge Assistant hero" width="100%">
+</p>
 
-A production-style RAG application for document-grounded Q&A. Users upload documents, ask questions, and receive evidence-backed answers with source citations, confidence checks, and diagnostics for missing, stale, or potentially conflicting information.
+<h1 align="center">TrustAware RAG Knowledge Assistant</h1>
+<p align="center"><b>Document-grounded question answering with hybrid retrieval, citations and confidence-aware knowledge-gap handling.</b></p>
 
-## Core capabilities
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white">
+  <img src="https://img.shields.io/badge/API-FastAPI-009688?logo=fastapi&logoColor=white">
+  <img src="https://img.shields.io/badge/Deployment-Docker-2496ED?logo=docker&logoColor=white">
+  <img src="https://img.shields.io/badge/License-MIT-green">
+</p>
 
-- PDF, DOCX, PPTX, XLSX, CSV/TSV, JSON, HTML, RTF, TXT, Markdown, and common image ingestion (image text is extracted with RapidOCR)
-- Smart chunking with configurable size and overlap
-- Keyword, semantic, and hybrid retrieval
-- Reciprocal Rank Fusion (RRF)
-- Lightweight reranking
-- Grounded LLM generation through OpenRouter, Gemini, or another OpenAI-compatible endpoint
-- Safe extractive fallback when no LLM key is configured
-- Inline source citations and retrieved evidence
-- Confidence-aware no-answer / knowledge-gap handling
-- Potential outdated-source and conflicting-information warnings
-- Idempotent source replacement and document listing
-- Metadata filtering
-- API-key authentication and IP-based rate limiting
-- Request IDs, health/readiness checks, runtime metrics, and safe errors
-- Dockerized deployment with non-root container and health check
-- Responsive chat UI with local conversation history and keyboard shortcuts
-- Chat search, rename/delete, Markdown export, and stop-generation controls
-- Per-file indexing status, document-type filters, and one-click source excerpt copying
-- Composer actions for file upload, pasted-text ingestion, retrieval-mode selection, and opt-in browser voice typing
-- Retrieval evaluation harness
+## Project overview
+
+TrustAware RAG Knowledge Assistant is a Retrieval-Augmented Generation application. Users upload knowledge sources, ask natural-language questions, and receive responses grounded in retrieved document evidence. The system combines lexical and semantic retrieval, Reciprocal Rank Fusion (RRF), reranking, evidence checks, source citations and knowledge-gap handling.
+
+**Repository:** https://github.com/Ganeshbasani/RAG-Knowledge-Assistant  
+**Live demo:** Add the verified deployment URL here. A live URL was not available in the repository review context, so none is fabricated.
+
+## Key capabilities
+
+- **Multi-format ingestion:** PDF, DOCX, PPTX, XLSX, CSV/TSV, JSON, HTML, RTF, TXT, Markdown and common image formats with OCR.
+- **Hybrid retrieval:** keyword/BM25 and semantic retrieval modes.
+- **Ranking:** Reciprocal Rank Fusion and configurable lightweight reranking.
+- **Grounded generation:** LLM answers generated from retrieved evidence, with source citations.
+- **Knowledge-gap handling:** insufficient evidence can trigger a no-answer response rather than unsupported claims.
+- **Trust diagnostics:** citation verification and potentially outdated/conflicting-source warnings.
+- **Chat experience:** responsive interface, conversation history, chat search, rename/delete, Markdown export and streaming.
+- **Evaluation:** curated answerable, unanswerable, adversarial and conflict cases; Recall@K, NDCG, abstention accuracy and citation precision.
+
+## Screenshots
+
+The original repository already contains four application captures. Keep these files in the `Screenshots/` directory and rename them to the descriptive names below if you choose to normalize the folder. The README references the current original filenames until those renames are made.
+
+| Capture | Existing image |
+|---|---|
+| Application view 01 | `Screenshots/Screenshot 2026-11-23 010347.png` |
+| Application view 02 | `Screenshots/Screenshot 2026-11-23 010354.png` |
+| Application view 03 | `Screenshots/Screenshot 2026-11-23 010842.png` |
+| Application view 04 | `Screenshots/Screenshot 2026-11-23 010917.png` |
 
 ## Architecture
 
-```text
-                        Web UI
-                           |
-                           v
-                       FastAPI API
-                           |
-         +-----------------+-----------------+
-         |                 |                 |
-         v                 v                 v
-  Document Pipeline   Retrieval Engine   Evaluation
-         |                 |
-  PDF/DOCX/TXT/MD     TF-IDF + Semantic
-         |                 |
-      Chunking              RRF
-         |                 |
-     Embeddings          Reranking
-         |                 |
-         +-----------+-----+
-                     v
-               Evidence Gate
-                 /       \
-             enough     weak/none
-                |           |
-                v           v
-               LLM      Knowledge Gap
-                |
-                v
-        Grounded Answer
-          + Citations
+```mermaid
+flowchart LR
+    A[Documents] --> B[Parsing and normalization]
+    B --> C[Chunking and metadata]
+    C --> D[Lexical and semantic retrieval]
+    D --> E[Reciprocal Rank Fusion]
+    E --> F[Reranking]
+    F --> G{Evidence sufficient?}
+    G -->|Yes| H[LLM answer generation]
+    H --> I[Citation verification]
+    I --> J[Grounded answer]
+    G -->|No| K[Knowledge-gap response]
 ```
+
+## Technology stack
+
+| Layer | Technologies |
+|---|---|
+| Backend | Python, FastAPI, Pydantic, Uvicorn |
+| Retrieval | BM25/lexical search, semantic embeddings, hybrid retrieval, RRF |
+| Reranking | Term-overlap; optional cross-encoder |
+| LLM adapters | OpenRouter, Gemini, OpenAI-compatible endpoints, Anthropic and Ollama (configuration-dependent) |
+| Vector storage | Embedded JSON index by default; optional Qdrant |
+| Metadata | SQLite by default; optional PostgreSQL |
+| Frontend | Responsive HTML, CSS and JavaScript |
+| Delivery | Docker, Docker Compose, Render configuration |
+| Quality | Automated tests and retrieval evaluation harness |
 
 ## Quick start
 
 ```bash
+git clone https://github.com/Ganeshbasani/RAG-Knowledge-Assistant.git
+cd RAG-Knowledge-Assistant/rag-knowledge-assistant-main
 python -m venv .venv
-# Windows
-.venv\\Scripts\\activate
-# macOS/Linux
-# source .venv/bin/activate
+```
 
+Windows PowerShell:
+```powershell
+.\\.venv\\Scripts\\Activate.ps1
 pip install -e ".[dev]"
-copy .env.example .env
+Copy-Item .env.example .env
+```
 
+macOS / Linux:
+```bash
+source .venv/bin/activate
+pip install -e ".[dev]"
+cp .env.example .env
+```
+
+Start the application:
+```bash
 rag-knowledge-assistant
 ```
 
 Or:
-
 ```bash
 uvicorn rag_assistant.api:app --reload --app-dir src
 ```
 
 Open `http://127.0.0.1:8000/ui/`.
 
-## Enable stronger semantic embeddings
-
-```bash
-pip install -e ".[embeddings]"
-```
-
-Then choose `sentence_transformers` as the embedding provider and configure `RAG_DEFAULT_EMBEDDING_MODEL` as needed.
-
-## Enable LLM generation
-
-The hosted portfolio setup uses OpenRouter's free-model router by default. Set `RAG_LLM_PROVIDER=openrouter`, `RAG_LLM_MODEL=openrouter/free`, `RAG_LLM_BASE_URL=https://openrouter.ai/api/v1/chat/completions`, and the server-side `OPENROUTER_API_KEY`; visitors never provide or see the key. If the provider key is missing, the UI shows that OpenRouter needs setup and the app retains its local extractive fallback.
-
-For another OpenAI-compatible provider instead:
-
-```env
-RAG_LLM_PROVIDER=openai_compatible
-RAG_LLM_API_KEY=your-key
-RAG_LLM_MODEL=provider/model-id
-RAG_LLM_BASE_URL=https://provider.example/v1/chat/completions
-```
-
-For Gemini, set `RAG_LLM_PROVIDER=gemini`, `RAG_LLM_MODEL=gemini-3.7-flash`, and `GEMINI_API_KEY`. Provider keys stay on the server and are never sent to the browser.
-
-This setup keeps document upload, indexing, retrieval, and citations in this application and sends only the retrieved context and question to the configured provider for answer generation. To let OpenAI host document search instead, use the [OpenAI File Search tool](https://developers.openai.com/api/docs/guides/tools-file-search); that changes where files are stored and how retrieval is managed.
-
-## Example query
-
-```json
-{
-  "question": "What is the remote work policy?",
-  "retrieval": "hybrid",
-  "embedding_provider": "local",
-  "reranker": "term_overlap",
-  "top_k": 5,
-  "generate": true
-}
-```
-
-The response includes `answer`, `grounded`, `confidence`, `knowledge_gap`, `citations`, `warnings`, `context`, `generation`, and `trace`.
-
-## Authentication and production mode
-
-With no `RAG_API_KEY` set, API authentication is **disabled** and a warning is logged at startup. The public portfolio demo intentionally leaves it unset so visitors can use the UI. For a private deployment, set `RAG_API_KEY` (requests send it as the `x-api-key` header):
-
-```env
-RAG_API_KEY=your-long-random-secret
-RAG_ENV=production
-```
-
-Setting `RAG_ENV=production` without `RAG_API_KEY` refuses to start. Destructive endpoints are step-up protected: `DELETE /clear` requires the `X-Clear-Confirm: DELETE` header in addition to the API key, and `DELETE /documents/{source_id}` returns `404` for unknown sources. Uploaded file queries (`/ingest/file?source_id=…`) are validated with bounds. Requests are capped at 10 MB on the declared `Content-Length` **and** counted as they stream in, so chunked transfers can't bypass the limit.
-
-## Storage & retrieval (Phase 1)
-
-The knowledge base is split into two storage seams (both stable API):
-
-- `VectorStore` — chunk records + embedding vectors.
-  - `json` (default): zero-dependency embedded JSON index.
-  - `qdrant`: persisted chunks + vectors in Qdrant with payload filters; **Docker Compose ships a Qdrant service + volume** (`docker-compose.yml`).
-- `MetadataStore` — documents, feedback, audit events, eval results. SQLite by default (`rag-metadata.db` beside the index), PostgreSQL via `RAG_DB_URL`.
-
-```env
-RAG_VECTOR_STORE=json                        # or qdrant
-RAG_QDRANT_URL=http://localhost:6333
-RAG_QDRANT_API_KEY=
-RAG_QDRANT_COLLECTION=rag-chunks
-RAG_DB_URL=                                  # e.g. postgresql+psycopg://... (metadata store)
-RAG_RERANKER=term_overlap                    # or cross_encoder
-RAG_RERANKER_MODEL=cross-encoder/ms-marco-MiniLM-L-6-v2
-```
-
-- Embeddings are persisted (keyed by provider/model/dims) and survive restarts; switching providers invalidates and re-embeds.
-- The `tfidf` lexical leg uses an incremental BM25 index (ingest is O(chunk); no more O(N²) corpus rebuilds).
-- Cross-encoder reranking (`cross_encoder`) requires the `[embeddings]` extra.
-
-**Migrate an existing JSON index to Qdrant** (the JSON engine is kept as rollback):
-
-```bash
-python scripts/migrate_json_to_qdrant.py --storage-path data/rag-index.json \
-    --qdrant-url http://localhost:6333 --collection rag-chunks
-```
-
-The script upserts chunks + vectors, then verifies counts and that every migrated chunk is present.
-
-## Generation & interaction (Phase 2)
-
-- **Hosted demo model:** OpenRouter's `openrouter/free` router is configured server-side. Add `OPENROUTER_API_KEY` in Render's Environment page and set `RAG_LLM_PROVIDER=openrouter`, `RAG_LLM_MODEL=openrouter/free`, and `RAG_LLM_BASE_URL=https://openrouter.ai/api/v1/chat/completions`. Visitors never provide or see the key. If the provider key is missing, Atlas uses its local extractive fallback. Free-model availability and limits can change; use public, non-sensitive demo documents only.
-- **Free hosting limits:** the Render free service sleeps after inactivity and uses ephemeral disk storage. Uploaded files and the search index may disappear after a restart or redeploy. This setup is suitable for a portfolio demonstration, not a persistent production workspace.
-
-- **Streaming answers:** `POST /query` with `"stream": true` → `text/event-stream` (`delta` events + a final `done` event with the full response). The UI appends tokens to the pending message in real time.
-- **Provider adapters:** `RAG_LLM_PROVIDER` defaults to `openrouter` with the `openrouter/free` model router; supported alternatives include `openai_compatible`, `anthropic`, `gemini`, and `ollama`. Retries with exponential backoff on 429/5xx (3 attempts); optional `RAG_LLM_MAX_OUTPUT_TOKENS` cap.
-- **Conversational memory:** `session_id` on `/query` — history (last 10 turns) is injected into the question for retrieval/generation; `GET /sessions` + `DELETE /sessions/{id}` for management.
-- **Query rewriting:** LLM-based variants (or rule-based fallback without a key); hybrid runs multi-query retrieval, merged via the existing RRF.
-- **Context assembly:** `context_max_tokens` budget, near-duplicate collapse, `[PAGE n]` markers stripped from context text.
-
-## Trust & evaluation (Phase 3)
-
-- **Injection hardening:** untrusted content (question + document excerpts) is wrapped in `<<<UNTRUSTED ... >>>` delimiters; the system prompt carries explicit instruction-priority and data-vs-instructions rules.
-- **Citation verification:** for LLM answers, `grounded` is computed — every citation must exist and the cited chunk must share lexical support with the answer (`generation.citation_verification` per response). Extractive answers are grounded by construction.
-- **Golden datasets:** `tests/fixtures/eval/` — `retrieval_cases`, `answerable_cases`, `unanswerable_cases`, `adversarial_cases`, `conflict_cases` (hand-verified, versioned in git).
-- **Extended harness:** `evals.load_cases()`, `recall_at_k`, `ndcg`, `abstention_accuracy`, `citation_precision` (JSONL loaders for the golden sets).
-- **Feedback:** `POST /feedback` / `GET /feedback` — ratings + comments; rows persist in the metadata store and join the eval dataset.
-- **Audit log:** `remove_source`/`clear_all` events written to the metadata store; destructive API calls are auditable.
-- **Security hardening:** `Content-Security-Policy` on all responses; docs/OpenAPI disabled when an API key is configured.
-
-## Multi-user & production readiness (Phase 4)
-
-- **JWT auth:** `RAG_JWT_SECRET`; `create_token`/`verify_token` (HS256, exp, issuer); `POST /auth/token` to mint tokens; static `RAG_API_KEY` remains the bootstrap admin key.
-- **Workspace isolation:** every query/ingest/delete is server-enforced to the caller's `workspace_id` (KB metadata filter, strict on delete); `GET /documents` scoped to the caller; `GET /workspaces`.
-- New deps: `pyjwt>=2.10`.
-
-## API
+## API overview
 
 | Method | Endpoint | Purpose |
 |---|---|---|
 | GET | `/health` | Liveness |
-| GET | `/ready` | Readiness / storage probe |
+| GET | `/ready` | Readiness and storage probe |
 | GET | `/stats` | Index statistics |
 | GET | `/documents` | List documents |
 | POST | `/ingest` | Ingest raw text |
-| POST | `/ingest/file` | Upload PDF/DOCX/TXT/MD |
-| POST | `/ingest/bulk` | Atomic bulk ingestion |
-| POST | `/ingest/async` | Queue a document for background ingestion (202 + job id) |
-| GET | `/ingest/status/{job_id}` | Background ingestion status |
-| GET | `/sessions` | Active session ids (Phase 2.3) |
-| DELETE | `/sessions/{session_id}` | Clear a session's history (Phase 2.3) |
-| POST | `/query` | Grounded query (add `"stream": true` for SSE) |
-| POST | `/query/semantic` | Semantic-only query |
-| DELETE | `/documents/{source_id}` | Delete a source (404 when unknown) |
-| DELETE | `/clear` | Clear index (requires `X-Clear-Confirm: DELETE`) |
-| POST | `/evals/run` | Retrieval evaluation |
+| POST | `/ingest/file` | Upload and ingest a file |
+| POST | `/ingest/bulk` | Bulk ingestion |
+| POST | `/query` | Grounded Q&A; optional SSE streaming |
+| POST | `/query/semantic` | Semantic-only retrieval |
+| POST | `/evals/run` | Run retrieval evaluation |
 | GET | `/metrics` | Runtime metrics |
 
-## Docker
+## Security and deployment notes
 
-```bash
-copy .env.example .env
-docker compose up --build
-```
+- API-key authentication is optional for local use and required by the documented production configuration.
+- Provider API keys must remain server-side and must never be committed.
+- Request IDs, safe errors, rate limiting and upload-size controls are documented.
+- The free Render configuration may sleep and uses ephemeral storage. Treat it as a portfolio demo, not a persistent production workspace.
+- The default JSON vector index is intended for a small single-instance deployment. Multi-instance production requires shared durable storage.
 
-The Docker image installs semantic dependencies, runs as a non-root user, and exposes a health check.
+## Suggested recruiter walkthrough
 
-## Evaluation
+1. Upload a small, non-sensitive document.
+2. Ask a question whose answer is explicitly present in that document.
+3. Inspect the generated answer and its citations.
+4. Ask an unrelated question to demonstrate knowledge-gap behavior.
+5. Review `/health` and the evaluation fixtures.
 
-Use a small curated set of representative questions and measure retrieval hit rate, MRR, no-answer accuracy, citation correctness, answer faithfulness/relevance, and response latency. The included evaluation endpoint focuses on retrieval metrics; generation-quality metrics can be layered on top of the returned evidence.
+## Resume-ready summary
 
-## Project structure
+> Built a trust-aware Retrieval-Augmented Generation application using Python and FastAPI, featuring multi-format document ingestion, hybrid lexical and semantic retrieval, Reciprocal Rank Fusion, reranking, evidence-grounded LLM responses, source citations, confidence-aware knowledge-gap handling, API security controls, Docker deployment configuration and retrieval evaluation.
 
-```text
-rag-knowledge-assistant/
-├── src/rag_assistant/
-│   ├── api.py
-│   ├── config.py
-│   ├── document_processor.py
-│   ├── embeddings.py
-│   ├── evals.py
-│   ├── knowledge_base.py
-│   ├── llm.py
-│   ├── metadata.py        ← structured metadata store (Phase 1.4)
-│   ├── models.py
-│   ├── ranking.py         ← BM25 lexical index (Phase 1.6)
-│   ├── rerankers.py       ← cross-encoder reranker (Phase 1.7)
-│   ├── stores.py          ← VectorStore: JSON + Qdrant (Phase 1)
-│   └── __init__.py
-├── scripts/
-│   └── migrate_json_to_qdrant.py
-├── ui/index.html
-├── tests/
-├── Dockerfile
-├── docker-compose.yml
-├── render.yaml
-├── .env.example
-└── README.md
-```
+## Scope transparency
 
-## Resume-ready project summary
-
-> Built a trust-aware RAG knowledge assistant using Python and FastAPI with document ingestion, hybrid keyword + semantic retrieval, reranking, grounded LLM responses, source citations, confidence-aware no-answer handling, knowledge diagnostics, Docker deployment, and automated retrieval evaluation.
-
-## Important scope note
-
-This release is designed as a **strong production-style portfolio implementation**. The default persistence engine is still a local JSON index, which is suitable for a small deployment and demonstration. For horizontal multi-worker scale, move the index to a shared database/vector store such as PostgreSQL + pgvector or a managed vector database.
+Optional providers and storage backends require configuration and should not be assumed active in every deployment. This README describes capabilities documented in the repository. The default JSON vector index is a small single-instance design; shared persistence and horizontal scaling require an appropriate shared backend.
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).
