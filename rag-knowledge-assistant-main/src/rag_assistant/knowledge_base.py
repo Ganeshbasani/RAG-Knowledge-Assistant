@@ -364,7 +364,10 @@ class KnowledgeBase:
     def _matches_filter(metadata: dict[str, Any], metadata_filter: dict[str, Any] | None) -> bool:
         if not metadata_filter:
             return True
-        return all(metadata.get(key) == value for key, value in metadata_filter.items())
+        return all(
+            metadata.get(key) in value if isinstance(value, (list, tuple, set)) else metadata.get(key) == value
+            for key, value in metadata_filter.items()
+        )
 
     def remove_source(self, source_id: str, *, workspace_id: str | None = None) -> int:
         with self._lock:
