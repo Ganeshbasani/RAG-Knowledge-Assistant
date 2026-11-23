@@ -19,6 +19,12 @@ services:
         value: openrouter/free
       - key: RAG_LLM_BASE_URL
         value: https://openrouter.ai/api/v1/chat/completions
+      - key: RAG_LLM_CONNECT_TIMEOUT_SECONDS
+        value: "8"
+      - key: RAG_LLM_READ_TIMEOUT_SECONDS
+        value: "24"
+      - key: RAG_LLM_MAX_RETRIES
+        value: "2"
       - key: RAG_RATE_LIMIT_REQUESTS
         value: "12"
       - key: RAG_RATE_LIMIT_WINDOW_SECONDS

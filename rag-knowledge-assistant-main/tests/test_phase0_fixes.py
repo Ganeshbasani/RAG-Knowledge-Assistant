@@ -196,6 +196,22 @@ def test_file_upload_failure_writes_no_orphan_artifact(api_client, tmp_path):
     assert not upload_dir.exists() or list(upload_dir.iterdir()) == []
 
 
+def test_blank_pdf_is_rejected_without_marking_document_indexed(api_client):
+    from io import BytesIO
+
+    from pypdf import PdfWriter
+
+    client, _ = api_client
+    buffer = BytesIO()
+    writer = PdfWriter()
+    writer.add_blank_page(width=72, height=72)
+    writer.write(buffer)
+
+    response = client.post("/ingest/file", files={"file": ("blank.pdf", buffer.getvalue(), "application/pdf")})
+    assert response.status_code == 400
+    assert client.get("/documents").json()["count"] == 0
+
+
 # --------------------------------------------------------------------------
 # Default embedder / metadata cap
 # --------------------------------------------------------------------------

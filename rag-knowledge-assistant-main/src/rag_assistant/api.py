@@ -90,6 +90,10 @@ answer_generator = AnswerGenerator(
     base_url=app_config.llm_base_url,
     timeout_seconds=app_config.llm_timeout_seconds,
     max_output_tokens=app_config.llm_max_output_tokens,
+    connect_timeout_seconds=app_config.llm_connect_timeout_seconds,
+    read_timeout_seconds=app_config.llm_read_timeout_seconds,
+    max_retries=app_config.llm_max_retries,
+    fallback_models=app_config.llm_fallback_models,
 )
 
 kb = KnowledgeBase(
@@ -124,7 +128,7 @@ app = FastAPI(
     title="TrustAware RAG Knowledge Assistant",
     version=__version__,
     description=("Document-grounded RAG API with hybrid retrieval, reranking, citations, "
-                 "confidence-aware no-answer handling, and knowledge diagnostics."),
+                 "evidence-gap handling, and knowledge diagnostics."),
     docs_url="/docs" if (app_config.docs_enabled and not app_config.api_key) else None,
     redoc_url="/redoc" if (app_config.docs_enabled and not app_config.api_key) else None,
     openapi_url="/openapi.json" if (app_config.docs_enabled and not app_config.api_key) else None,
@@ -394,7 +398,10 @@ async def middleware(request: Request, call_next):
         logger.exception("Unhandled request failure: %s %s", request.method, path)
         raise
 
-    _metrics.record(request.method, path, response.status_code, (time.perf_counter() - started) * 1000)
+    duration_ms = round((time.perf_counter() - started) * 1000, 2)
+    _metrics.record(request.method, path, response.status_code, duration_ms)
+    logger.info("request_complete request_id=%s method=%s path=%s status=%s duration_ms=%s",
+                request.state.request_id, request.method, path, response.status_code, duration_ms)
     return _apply_response_headers(response, request, path)
 
 
@@ -466,20 +473,6 @@ def _source_citations(chunks: list) -> list[Citation]:
         citations.append(Citation(citation_id=index, source_id=chunk.source_id,
                                   chunk_index=chunk.chunk_index, label=label, metadata=chunk.metadata))
     return citations
-
-
-def _confidence(chunks: list, retrieval: str) -> float:
-    if not chunks:
-        return 0.0
-    best = max(float(chunk.score) for chunk in chunks)
-    if retrieval == "hybrid":
-        # RRF scores are small; relative separation is more meaningful than the raw score.
-        if len(chunks) == 1:
-            return 0.72
-        second = float(chunks[1].score)
-        separation = max(0.0, (best - second) / max(best, 1e-9))
-        return round(min(0.92, 0.25 + min(0.45, best * 12.0) + 0.2 * separation), 3)
-    return round(min(0.98, max(0.0, best)), 3)
 
 
 def _parse_date(value: object) -> datetime | None:
@@ -592,16 +585,16 @@ def _grounded_status(answer: str, citations: list[Citation], context: list[Conte
     return grounded, verification
 
 
-def _build_response(question: str, chunks: list, trace: dict, payload: QueryRequest) -> QueryResponse:
+def _build_response(question: str, chunks: list, trace: dict, payload: QueryRequest,
+                    request_id: str | None = None) -> QueryResponse:
     chunks = _trim_context(_dedup_context(chunks), payload.context_max_tokens)
     context = [ContextChunk(source_id=c.source_id, chunk_index=c.chunk_index, text=_strip_page_markers(c.text),
                              score=round(c.score, 4), metadata=c.metadata) for c in chunks]
     citations = _source_citations(chunks)
     warnings, knowledge_gap = _diagnose_sources(chunks)
-    confidence = _confidence(chunks, payload.retrieval)
-    if confidence < 0.35:
-        knowledge_gap = True
-        warnings.append("Evidence confidence is low; the assistant will avoid unsupported claims.")
+    # Confidence is intentionally null until a representative labeled evaluation
+    # set is used to calibrate a probability. Retrieval scores are not probabilities.
+    confidence = None
     if knowledge_gap and (not payload.generate or not answer_generator.enabled or not chunks):
         answer = ("I couldn't find a relevant passage in the indexed documents for that question. "
                   "Try asking about a specific topic, or attach the file you want me to use.")
@@ -619,22 +612,32 @@ def _build_response(question: str, chunks: list, trace: dict, payload: QueryRequ
     # silently turn a document-grounded request into a general-knowledge answer.
     generation_context = [{"source_id": c.source_id, "chunk_index": c.chunk_index, "text": c.text, "metadata": c.metadata} for c in chunks]
     try:
+        logger.info("llm_request_started request_id=%s provider=%s model=%s",
+                    request_id or "-", answer_generator.provider, answer_generator.model)
         generation = answer_generator.generate(question, generation_context, [c.model_dump() for c in citations])
+        logger.info("llm_response_received request_id=%s provider=%s model=%s latency_ms=%.2f",
+                    request_id or "-", generation.provider, generation.model, generation.latency_ms)
     except LLMError as exc:
         cause = exc.__cause__
-        logger.warning("LLM generation failed (provider=%s model=%s cause=%s); using fallback: %s",
-                       answer_generator.provider, answer_generator.model,
-                       str(cause)[:300] if cause else "unknown", exc)
+        logger.warning("llm_generation_failed request_id=%s provider=%s model=%s category=%s status=%s cause=%s",
+                       request_id or "-", answer_generator.provider,
+                       answer_generator.model, exc.category, exc.status_code,
+                       type(cause).__name__ if cause else "unknown")
         fallback = answer_generator.extractive(question, generation_context)
         generation = type("Fallback", (), {"answer": fallback, "provider": "extractive-fallback", "model": None,
-                                            "latency_ms": 0.0, "used_llm": False})()
-        warnings.append("LLM generation was unavailable; an extractive grounded answer was used.")
+                                            "latency_ms": 0.0, "used_llm": False,
+                                            "error_category": exc.category, "http_status": exc.status_code})()
+        warnings.append(f"{exc} A passage-based fallback is shown.")
     grounded, citation_verification = _grounded_status(generation.answer, citations, context,
                                                         used_llm=generation.used_llm)
+    logger.info("citation_validation_complete request_id=%s citations=%s grounded=%s",
+                request_id or "-", len(citations), grounded)
     return QueryResponse(answer=generation.answer, grounded=grounded, confidence=confidence, knowledge_gap=knowledge_gap,
                          citations=citations, warnings=list(dict.fromkeys(warnings)), context=context,
                          count=len(context), generation={"provider": generation.provider, "model": generation.model,
                                                          "latency_ms": generation.latency_ms, "used_llm": generation.used_llm,
+                                                          "error_category": getattr(generation, "error_category", None),
+                                                          "http_status": getattr(generation, "http_status", None),
                                                           "citation_verification": citation_verification},
                          trace=trace)
 
@@ -812,6 +815,9 @@ def _stream_query(payload: QueryRequest, request: Request) -> Iterator[str]:
                                             local_dimensions=payload.local_dimensions, reranker=payload.reranker,
                                             candidate_pool_size=payload.candidate_pool_size,
                                             metadata_filter=payload.metadata_filter, workspace_id=workspace_id)
+        logger.info("retrieval_complete request_id=%s retrieval=%s candidates=%s returned=%s",
+                    getattr(request.state, "request_id", "-"), trace.get("retrieval"),
+                    trace.get("candidates_considered", 0), len(chunks))
     except Exception:
         logger.exception("RAG retrieval failed while streaming a query.")
         yield _sse_event({"type": "error", "message": "Document search failed. Please retry your question."})
@@ -819,7 +825,7 @@ def _stream_query(payload: QueryRequest, request: Request) -> Iterator[str]:
     chunks = _trim_context(_dedup_context(chunks), payload.context_max_tokens)
 
     if not chunks:
-        response = _build_response(question, chunks, trace, payload)
+        response = _build_response(question, chunks, trace, payload, request_id=getattr(request.state, "request_id", None))
         yield _sse_event({"type": "done", "response": response.model_dump()})
         if payload.session_id:
             kb.record_turn(payload.session_id, "user", payload.question)
@@ -827,18 +833,15 @@ def _stream_query(payload: QueryRequest, request: Request) -> Iterator[str]:
         return
 
     if not payload.generate or not answer_generator.enabled:
-        response = _build_response(question, chunks, trace, payload)
+        response = _build_response(question, chunks, trace, payload, request_id=getattr(request.state, "request_id", None))
         yield _sse_event({"type": "done", "response": response.model_dump()})
         return
 
     warnings, knowledge_gap = _diagnose_sources(chunks)
-    confidence = _confidence(chunks, payload.retrieval)
-    if confidence < 0.35:
-        knowledge_gap = True
-        warnings.append("Evidence confidence is low; the assistant will avoid unsupported claims.")
+    confidence = None
 
     if knowledge_gap and not answer_generator.enabled:
-        response = _build_response(question, chunks, trace, payload)
+        response = _build_response(question, chunks, trace, payload, request_id=getattr(request.state, "request_id", None))
         yield _sse_event({"type": "done", "response": response.model_dump()})
         return
 
@@ -848,27 +851,48 @@ def _stream_query(payload: QueryRequest, request: Request) -> Iterator[str]:
     generation_context = [{"source_id": c.source_id, "chunk_index": c.chunk_index, "text": c.text,
                            "metadata": c.metadata} for c in chunks]
     deltas: list[str] = []
+    answer = ""
     used_llm = False
+    generation_error: LLMError | None = None
     try:
+        generation_started = time.perf_counter()
+        logger.info("llm_stream_started request_id=%s provider=%s model=%s",
+                    getattr(request.state, "request_id", "-"), answer_generator.provider, answer_generator.model)
         for delta in answer_generator.generate_stream(question, generation_context, [c.model_dump() for c in citations]):
             if delta:
                 deltas.append(delta)
                 yield _sse_event({"type": "delta", "text": delta})
+        answer = "".join(deltas).strip()
+        if not answer:
+            raise LLMError("The model provider returned an empty answer.", category="provider_empty_response")
         used_llm = True
+        logger.info("llm_stream_complete request_id=%s provider=%s model=%s duration_ms=%.2f",
+                    getattr(request.state, "request_id", "-"), answer_generator.provider,
+                    answer_generator.model, (time.perf_counter() - generation_started) * 1000)
     except LLMError as exc:
+        generation_error = exc
         cause = exc.__cause__
-        logger.warning("LLM stream failed (provider=%s model=%s cause=%s); using fallback: %s",
-                       answer_generator.provider, answer_generator.model,
-                       str(cause)[:300] if cause else "unknown", exc)
-        answer = "".join(deltas) if used_llm else answer_generator.extractive(question, generation_context)
+        logger.warning("llm_stream_failed request_id=%s provider=%s model=%s category=%s status=%s cause=%s",
+                       getattr(request.state, "request_id", "-"), answer_generator.provider,
+                       answer_generator.model, exc.category, exc.status_code,
+                       type(cause).__name__ if cause else "unknown")
+        warnings.append(f"{exc} A passage-based fallback is shown.")
+        answer = answer_generator.extractive(question, generation_context)
+        if deltas and not used_llm:
+            # Replace any already-rendered partial provider output in the UI.
+            yield _sse_event({"type": "replace", "text": answer})
     if not answer.strip():
         answer = "I couldn't get a response from the model just now. Please try again."
     grounded, citation_verification = _grounded_status(answer, citations, context, used_llm=used_llm)
+    logger.info("citation_validation_complete request_id=%s citations=%s grounded=%s",
+                getattr(request.state, "request_id", "-"), len(citations), grounded)
     response = QueryResponse(
         answer=answer, grounded=grounded, confidence=confidence, knowledge_gap=knowledge_gap,
         citations=citations, warnings=list(dict.fromkeys(warnings)), context=context, count=len(context),
         generation={"provider": answer_generator.provider, "model": answer_generator.model,
-                    "used_llm": used_llm, "citation_verification": citation_verification},
+                    "used_llm": used_llm, "error_category": generation_error.category if generation_error else None,
+                    "http_status": generation_error.status_code if generation_error else None,
+                    "citation_verification": citation_verification},
         trace=trace,
     )
     yield _sse_event({"type": "done", "response": response.model_dump()})
@@ -892,12 +916,15 @@ def query(payload: QueryRequest, request: Request) -> QueryResponse | StreamingR
                                             local_dimensions=payload.local_dimensions, reranker=payload.reranker,
                                             candidate_pool_size=payload.candidate_pool_size,
                                             metadata_filter=payload.metadata_filter, workspace_id=workspace_id)
+        logger.info("retrieval_complete request_id=%s retrieval=%s candidates=%s returned=%s",
+                    getattr(request.state, "request_id", "-"), trace.get("retrieval"),
+                    trace.get("candidates_considered", 0), len(chunks))
     except Exception as exc:
         logger.exception("Query failed")
         raise HTTPException(status_code=503, detail="Query processing failed. Check embedding configuration.") from exc
     if not chunks and kb.stats()["chunks"] == 0:
         raise HTTPException(status_code=404, detail="No documents are indexed. Upload or ingest a document first.")
-    response = _build_response(question, chunks, trace, payload)
+    response = _build_response(question, chunks, trace, payload, request_id=getattr(request.state, "request_id", None))
     if payload.session_id:
         kb.record_turn(payload.session_id, "user", payload.question)
         kb.record_turn(payload.session_id, "assistant", response.answer)

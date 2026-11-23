@@ -382,6 +382,18 @@ class QdrantVectorStore:
                     and all(isinstance(v, (int, float)) for v in vector)
                 ):
                     vectors[(source_id, chunk_index)] = [float(v) for v in vector]
+                    raw_key = payload.get("embedding_key")
+                    if isinstance(raw_key, str):
+                        try:
+                            parsed_key = json.loads(raw_key)
+                            if isinstance(parsed_key, list) and len(parsed_key) == 3:
+                                self._vector_key = (
+                                    str(parsed_key[0]),
+                                    parsed_key[1] if isinstance(parsed_key[1], str) else None,
+                                    parsed_key[2] if isinstance(parsed_key[2], int) else None,
+                                )
+                        except json.JSONDecodeError:
+                            continue
             if offset is None:
                 break
         return vectors
@@ -407,9 +419,12 @@ class QdrantVectorStore:
                 if chunks:
                     self.save_chunks(chunks)
         self._vector_key = tuple(embedding_key) if embedding_key else None
+        serialized_embedding_key = json.dumps(self._vector_key, separators=(",", ":")) if self._vector_key else None
         points = []
         for (source_id, chunk_index), vector in vectors.items():
             payload = self._chunk_payload(self._chunk_cache.get((source_id, chunk_index)))
+            if serialized_embedding_key:
+                payload["embedding_key"] = serialized_embedding_key
             points.append(
                 self._qmodels.PointStruct(
                     id=self._point_id(source_id, chunk_index),
@@ -428,7 +443,7 @@ class QdrantVectorStore:
         *,
         top_k: int,
         source_ids: Sequence[str] | None = None,
-        embedding_key: str | None = None,
+        embedding_key: tuple[str, str | None, int | None] | None = None,
     ) -> list[tuple[str, int, float, dict[str, Any]]]:
         if not self._collection_exists():
             return []
@@ -439,7 +454,8 @@ class QdrantVectorStore:
             ))
         if embedding_key:
             conditions.append(self._qmodels.FieldCondition(
-                key="embedding_key", match=self._qmodels.MatchValue(value=embedding_key)
+                key="embedding_key",
+                match=self._qmodels.MatchValue(value=json.dumps(embedding_key, separators=(",", ":")))
             ))
         query_filter = self._qmodels.Filter(must=conditions) if conditions else None
         response = self._client.query_points(

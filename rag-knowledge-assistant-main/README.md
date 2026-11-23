@@ -185,6 +185,12 @@ flowchart TD
 9. **Citation Verification:** Sources are checked to support the generated answer.
 10. **Response:** The application returns an answer or an appropriate knowledge-gap response.
 
+### OpenRouter resilience and evidence reporting
+
+The OpenRouter adapter uses independent connect/read timeouts and a bounded retry count (`RAG_LLM_CONNECT_TIMEOUT_SECONDS`, `RAG_LLM_READ_TIMEOUT_SECONDS`, and `RAG_LLM_MAX_RETRIES`). It respects `Retry-After` for transient provider limits and can route through optional comma-separated `RAG_LLM_FALLBACK_MODELS`. Provider errors are classified and reported without logging provider response bodies or credentials. A passage-based fallback is labeled when generation fails.
+
+The API leaves `confidence` null and the UI does not show an evidence percentage until a representative labeled evaluation set can calibrate one. Retrieval ranking scores are not probabilities. An empty retrieval returns an insufficient-evidence response and never calls the model without document passages.
+
 ---
 
 ## ⚙️ Installation and Local Setup
@@ -291,6 +297,13 @@ http://127.0.0.1:8000/ui/
 
 **Deployment consideration:** The free Render configuration may sleep and uses ephemeral storage. The default JSON vector index is intended for small, single-instance deployments. Persistent shared storage and horizontal scaling require suitable infrastructure.
 
+### Render environment variables
+
+- Set `RAG_LLM_PROVIDER=openrouter`, `RAG_LLM_MODEL=openrouter/free`, and either `OPENROUTER_API_KEY` or `RAG_LLM_API_KEY`. The provider key is read only by the server; never put it in frontend code.
+- `RAG_API_KEY` is a separate API authentication secret. The browser UI does not have a sign-in flow for this service key, so leave it unset for the public demo; if it is set, unauthenticated browser requests receive `401` even when OpenRouter is configured correctly.
+- `RAG_LLM_CONNECT_TIMEOUT_SECONDS`, `RAG_LLM_READ_TIMEOUT_SECONDS`, `RAG_LLM_MAX_RETRIES`, and optional `RAG_LLM_FALLBACK_MODELS` tune bounded provider retries. `llm_enabled` is a health-response field, not a Render environment variable.
+- Render's free filesystem is temporary. Uploaded documents and the JSON index can disappear after a restart or redeploy; durable persistence needs a persistent disk or an external storage service.
+
 ---
 
 ## 🧪 Suggested Demo Walkthrough
@@ -310,7 +323,7 @@ Recruiters and reviewers can explore the application using the following steps:
 
 ## 💼 Resume-Ready Project Description
 
-Built a TrustAware Retrieval-Augmented Generation application using Python and FastAPI, implementing multi-format document ingestion, hybrid lexical and semantic retrieval, Reciprocal Rank Fusion, reranking, evidence-grounded LLM responses, source citations, confidence-aware knowledge-gap handling, API security controls, Docker deployment configuration, and retrieval evaluation.
+Built a TrustAware Retrieval-Augmented Generation application using Python and FastAPI, implementing multi-format document ingestion, hybrid lexical and semantic retrieval, Reciprocal Rank Fusion, reranking, evidence-grounded LLM responses, source citations, honest knowledge-gap handling, API security controls, Docker deployment configuration, and retrieval evaluation.
 
 ## 📁 Repository Structure
 
@@ -348,7 +361,7 @@ RAG-Knowledge-Assistant/
 Potential areas for further development:
 
 - Advanced retrieval optimization.
-- Improved confidence calibration.
+- Calibrated evidence confidence against a labeled dataset.
 - Expanded evaluation and CI quality gates.
 - Enhanced observability.
 - Improved resilience and fault handling.

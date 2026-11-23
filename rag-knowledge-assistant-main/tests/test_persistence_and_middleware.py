@@ -32,6 +32,34 @@ def test_persistence_save_and_reload(tmp_path):
     assert result[0].metadata["source"] == "unit-test"
 
 
+def test_semantic_vectors_survive_restart_without_reembedding(tmp_path, monkeypatch):
+    storage_path = tmp_path / "semantic-index.json"
+    kb = KnowledgeBase(storage_path=str(storage_path))
+    kb.ingest("semantic-doc", "Persistent embeddings should be reused after restart.")
+    assert kb.query("How are embeddings reused?", retrieval="semantic", embedding_provider="local",
+                    local_dimensions=24)
+    persisted_vectors = dict(kb._vectors)
+    persisted_key = kb._vector_key
+    assert persisted_vectors and persisted_key == ("local_hash", None, 24)
+
+    reloaded = KnowledgeBase(storage_path=str(storage_path))
+    assert reloaded._vectors == persisted_vectors
+    assert reloaded._vector_key == persisted_key
+
+    class ExistingVectorsOnly:
+        def fit(self, _texts):
+            raise AssertionError("persisted vectors should not be re-embedded")
+
+        def encode(self, texts):
+            vector = next(iter(persisted_vectors.values()))
+            return [vector for _ in texts]
+
+    monkeypatch.setattr("rag_assistant.knowledge_base.build_embedding_provider", lambda _spec: ExistingVectorsOnly())
+    assert reloaded.query("How are embeddings reused?", retrieval="semantic", embedding_provider="local",
+                          local_dimensions=24)
+    assert reloaded._vectors == persisted_vectors
+
+
 def test_persistence_probe(tmp_path):
     storage_path = tmp_path / "index.json"
     kb = KnowledgeBase(storage_path=str(storage_path))

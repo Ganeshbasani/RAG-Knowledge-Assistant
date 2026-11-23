@@ -13,6 +13,7 @@ authors = [{ name = "Ganesh Basani" }]
 keywords = ["rag", "llm", "retrieval", "fastapi", "knowledge-base", "citations", "document-ai"]
 dependencies = [
   "fastapi>=0.110",
+  "httpx>=0.27",
   "uvicorn[standard]>=0.29",
   "pydantic>=2.7",
   "python-multipart>=0.0.9",

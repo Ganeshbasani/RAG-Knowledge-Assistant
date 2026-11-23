@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import itertools
+import math
 import re
 from collections import defaultdict
 from collections.abc import Callable
@@ -104,6 +105,21 @@ class KnowledgeBase:
         self._vector_key: tuple[str, str | None, int | None] | None = self._store.load_vector_key()
         self._bm25 = BM25Index()
         self._bm25.rebuild({(c["source_id"], c["chunk_index"]): KnowledgeBase._tokenize(c["text"]) for c in self._chunks})
+        self._sync_document_metadata()
+
+    def _sync_document_metadata(self) -> None:
+        """Reconcile the document catalog against the indexed chunk store at startup."""
+        by_source: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for chunk in self._chunks:
+            by_source[chunk["source_id"]].append(chunk)
+        stored = {record.source_id for record in self._metadata_store.list_documents()}
+        for source_id in stored - by_source.keys():
+            self._metadata_store.delete_document(source_id)
+        for source_id, chunks in by_source.items():
+            metadata = chunks[0].get("metadata", {}) or {}
+            self._metadata_store.upsert_document(
+                DocumentRecord.from_chunk_metadata(source_id, len(chunks), metadata)
+            )
 
     # ------------------------------------------------------------------ validators
     @staticmethod
@@ -475,7 +491,7 @@ class KnowledgeBase:
         cache_key = self._build_provider_cache_key(normalized_provider, embedding_model, local_dimensions)
         if self._provider_cache_key == cache_key and self._embedding_provider is not None:
             return self._embedding_provider, cache_key
-        if cache_key != self._provider_cache_key:
+        if self._vector_key is not None and cache_key != self._vector_key:
             # Switching providers invalidates stored vectors: re-embed fresh, never mix keys.
             self._vectors = {}
             self._vector_key = None
@@ -500,6 +516,12 @@ class KnowledgeBase:
             encoded = provider.encode(texts)
             if len(encoded) != len(texts):
                 raise RuntimeError("embedding provider returned an unexpected number of vectors")
+            dimensions = len(encoded[0]) if encoded else 0
+            if dimensions <= 0 or any(
+                len(vector) != dimensions or any(not math.isfinite(float(value)) for value in vector)
+                for vector in encoded
+            ):
+                raise RuntimeError("embedding provider returned invalid or inconsistent vectors")
             vectors = {(chunk["source_id"], chunk["chunk_index"]): vec for chunk, vec in zip(self._chunks, encoded, strict=True)}
         self._vectors = vectors
         self._vector_key = vector_key
@@ -508,6 +530,9 @@ class KnowledgeBase:
     def _query_semantic(self, question: str, provider: Any, vector_key: tuple[str, str | None, int | None],
                         top_k: int, min_score: float, metadata_filter: dict[str, Any] | None = None) -> list[RetrievedChunk]:
         query_vector = provider.encode([question])[0]
+        expected_dimensions = next((len(vector) for vector in self._vectors.values()), None)
+        if expected_dimensions is not None and len(query_vector) != expected_dimensions:
+            raise RuntimeError("query embedding dimensions do not match the indexed vectors")
         source_ids = sorted({chunk["source_id"] for chunk in self._chunks}) if metadata_filter else None
         results = self._store.query_vectors(query_vector, top_k=top_k, source_ids=source_ids, embedding_key=vector_key)
         scored: list[RetrievedChunk] = []

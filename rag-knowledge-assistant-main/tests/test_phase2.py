@@ -10,7 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from rag_assistant.knowledge_base import KnowledgeBase
-from rag_assistant.llm import AnswerGenerator, _rule_based_variants
+from rag_assistant.llm import AnswerGenerator, LLMError, _rule_based_variants
 from rag_assistant.sessions import SessionStore
 
 
@@ -126,10 +126,52 @@ def test_api_streaming_query_events(api_client):
     events = [json.loads(line[len("data: "):]) for line in response.text.split("\n\n")
               if line.startswith("data: ")]
     assert events
-    assert all(event["type"] in {"delta", "done"} for event in events)
+    assert all(event["type"] in {"delta", "replace", "done"} for event in events)
     done = [event for event in events if event["type"] == "done"]
     assert done and done[0]["response"]["count"] >= 1
     assert done[0]["response"]["answer"]
+
+
+def test_api_replaces_partial_stream_after_provider_failure(api_client, monkeypatch):
+    client, api_module = api_client
+    client.post("/ingest", json={
+        "source_id": "remote-policy",
+        "content": "The remote work policy allows three days every week.",
+    })
+
+    def interrupted_stream(*_args, **_kwargs):
+        yield "A partial model answer"
+        raise LLMError("Provider stream interrupted.", category="provider_stream_interrupted")
+
+    api_module.answer_generator._adapter = type("FakeAdapter", (), {"model": "test-model"})()
+    monkeypatch.setattr(api_module.answer_generator, "generate_stream", interrupted_stream)
+    response = client.post("/query", json={"question": "How many remote days each week?", "stream": True})
+    assert response.status_code == 200
+    events = [json.loads(line[len("data: "):]) for line in response.text.split("\n\n")
+              if line.startswith("data: ")]
+    assert any(event["type"] == "delta" for event in events)
+    replacement = next(event for event in events if event["type"] == "replace")
+    done = next(event for event in events if event["type"] == "done")
+    assert "partial model answer" not in replacement["text"]
+    assert replacement["text"] == done["response"]["answer"]
+    assert done["response"]["generation"]["error_category"] == "provider_stream_interrupted"
+
+
+def test_api_completes_successful_provider_stream(api_client, monkeypatch):
+    client, api_module = api_client
+    client.post("/ingest", json={"source_id": "remote-policy", "content": "Remote work is allowed three days per week."})
+
+    def complete_stream(*_args, **_kwargs):
+        yield "Remote work is allowed three days per week. [1]"
+
+    api_module.answer_generator._adapter = type("FakeAdapter", (), {"model": "test-model"})()
+    monkeypatch.setattr(api_module.answer_generator, "generate_stream", complete_stream)
+    response = client.post("/query", json={"question": "How many days per week?", "stream": True})
+    events = [json.loads(line[len("data: "):]) for line in response.text.split("\n\n")
+              if line.startswith("data: ")]
+    done = next(event["response"] for event in events if event["type"] == "done")
+    assert done["answer"] == "Remote work is allowed three days per week. [1]"
+    assert done["generation"]["used_llm"] is True
 
 
 def test_api_sessions_endpoints(api_client):

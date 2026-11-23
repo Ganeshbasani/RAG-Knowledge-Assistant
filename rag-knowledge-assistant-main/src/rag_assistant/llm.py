@@ -12,6 +12,7 @@ by the API layer and keeps the legacy public API.
 
 from __future__ import annotations
 
+import email.utils
 import json
 import re
 import time
@@ -19,6 +20,8 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any, Protocol
 from urllib import error, request
+
+import httpx
 
 GROUNDED_SYSTEM_PROMPT = (
     "You are a grounded knowledge assistant. Answer only from the provided source context. "
@@ -49,6 +52,13 @@ class GenerationResult:
 class LLMError(RuntimeError):
     """Raised when an external LLM provider cannot generate a response."""
 
+    def __init__(self, message: str, *, category: str = "provider_error", status_code: int | None = None,
+                 retryable: bool = False) -> None:
+        super().__init__(message)
+        self.category = category
+        self.status_code = status_code
+        self.retryable = retryable
+
 
 def _apply_token_budget(text: str, max_tokens: int | None) -> str:
     if not text or not max_tokens or max_tokens <= 0:
@@ -63,6 +73,36 @@ def _backoff_sleep(attempt: int) -> None:
 
 def _retryable_http_error(exc: error.HTTPError) -> bool:
     return exc.code in _RETRYABLE_CODES
+
+
+def _retry_after_seconds(value: str | None, attempt: int) -> float:
+    if value:
+        try:
+            return min(8.0, max(0.0, float(value)))
+        except ValueError:
+            try:
+                target = email.utils.parsedate_to_datetime(value).timestamp()
+                return min(8.0, max(0.0, target - time.time()))
+            except (TypeError, ValueError, OverflowError):
+                pass
+    return min(4.0, 0.5 * (2 ** attempt) + 0.05)
+
+
+def _provider_http_error(status_code: int) -> LLMError:
+    messages = {
+        400: ("The model provider rejected the request. Check the selected model and request settings.", "invalid_request"),
+        401: ("The model provider rejected its API key. Check the server-side provider secret.", "provider_auth"),
+        402: ("The model provider requires credits for this request.", "provider_payment_required"),
+        403: ("The model provider denied this request. Check key permissions or model access.", "provider_forbidden"),
+        408: ("The model provider timed out while processing the request.", "provider_timeout"),
+        429: ("The model provider is rate limiting requests. Please wait and retry.", "provider_rate_limited"),
+        500: ("The model provider encountered an internal error.", "provider_upstream_error"),
+        502: ("The model provider returned a temporary gateway error.", "provider_upstream_error"),
+        503: ("The selected model is temporarily unavailable.", "provider_unavailable"),
+    }
+    message, category = messages.get(status_code, (f"The model provider returned HTTP {status_code}.", "provider_error"))
+    return LLMError(message, category=category, status_code=status_code,
+                    retryable=status_code in _RETRYABLE_CODES)
 
 
 def extractive_fallback(question: str, context: list[dict[str, Any]], max_sentences: int = 4) -> str:
@@ -159,13 +199,18 @@ class OpenAICompatibleAdapter:
     name = "openai_compatible"
 
     def __init__(self, model: str, api_key: str | None, base_url: str, timeout_seconds: int = 30,
-                 max_output_tokens: int | None = None, max_retries: int = 3) -> None:
+                 max_output_tokens: int | None = None, max_retries: int = 2,
+                 connect_timeout_seconds: int = 8, read_timeout_seconds: int | None = None,
+                 fallback_models: tuple[str, ...] = ()) -> None:
         self.model = model.strip() or "gpt-6.2-astra"
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = max(5, timeout_seconds)
+        self.connect_timeout_seconds = max(1, connect_timeout_seconds)
+        self.read_timeout_seconds = max(1, read_timeout_seconds or timeout_seconds)
         self.max_output_tokens = max_output_tokens
-        self.max_retries = max_retries
+        self.max_retries = min(4, max(0, max_retries))
+        self.fallback_models = tuple(model.strip() for model in fallback_models if model.strip())
 
     # ----------------------------------------------------------------- requests
     def _build_request(self, payload: dict[str, Any]) -> request.Request:
@@ -177,29 +222,65 @@ class OpenAICompatibleAdapter:
         )
 
     def _messages_payload(self, system: str, user: str) -> dict[str, Any]:
-        return {
+        payload = {
             "model": self.model,
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
         }
+        if self.fallback_models:
+            payload["models"] = list(self.fallback_models)
+        return payload
+
+    def _http_timeout(self) -> httpx.Timeout:
+        return httpx.Timeout(connect=self.connect_timeout_seconds, read=self.read_timeout_seconds,
+                             write=self.read_timeout_seconds, pool=self.connect_timeout_seconds)
+
+    @staticmethod
+    def _request_parts(req: request.Request) -> tuple[str, str, dict[str, str], bytes | None]:
+        body = req.data
+        if isinstance(body, str):
+            body = body.encode("utf-8")
+        return req.get_method(), req.full_url, dict(req.header_items()), body
+
+    def _send_json_request(self, payload: dict[str, Any]) -> httpx.Response:
+        method, url, headers, body = self._request_parts(self._build_request(payload))
+        with httpx.Client(timeout=self._http_timeout(), follow_redirects=False) as client:
+            return client.request(method, url, headers=headers, content=body)
 
     def _request_with_retry(self, payload: dict[str, Any]) -> dict[str, Any]:
-        last_exc: Exception | None = None
         for attempt in range(self.max_retries + 1):
             try:
-                with request.urlopen(self._build_request(payload), timeout=self.timeout_seconds) as response:
-                    return json.loads(response.read().decode("utf-8"))
-            except (error.URLError, error.HTTPError, KeyError, IndexError, json.JSONDecodeError) as exc:
-                last_exc = exc
-                retryable = isinstance(exc, error.HTTPError) and _retryable_http_error(exc)
-                if not retryable or attempt == self.max_retries:
-                    break
-                _backoff_sleep(attempt)
-        raise LLMError("LLM provider request failed.") from last_exc
+                response = self._send_json_request(payload)
+                if response.status_code >= 400:
+                    failure = _provider_http_error(response.status_code)
+                    if failure.retryable and attempt < self.max_retries:
+                        time.sleep(_retry_after_seconds(response.headers.get("Retry-After"), attempt))
+                        continue
+                    raise failure
+                try:
+                    result = response.json()
+                except (ValueError, json.JSONDecodeError) as exc:
+                    raise LLMError("The model provider returned malformed JSON.", category="provider_bad_response") from exc
+                if not isinstance(result, dict):
+                    raise LLMError("The model provider returned an unexpected response shape.", category="provider_bad_response")
+                if result.get("error"):
+                    raise LLMError("The model provider returned an error response.", category="provider_error")
+                return result
+            except (httpx.TimeoutException, httpx.NetworkError) as exc:
+                if attempt >= self.max_retries:
+                    category = "provider_timeout" if isinstance(exc, httpx.TimeoutException) else "provider_connection_error"
+                    raise LLMError("The model provider could not be reached in time. Please retry shortly.",
+                                   category=category, retryable=True) from exc
+                time.sleep(_retry_after_seconds(None, attempt))
+        raise LLMError("The model provider request failed after bounded retries.", category="provider_error")
 
     # ------------------------------------------------------------------- output
     def _generate_text(self, system: str, user: str) -> str:
         result = self._request_with_retry(self._messages_payload(system, user))
-        content = result["choices"][0]["message"]["content"]
+        try:
+            content = result["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise LLMError("The model provider returned an unexpected response shape.",
+                           category="provider_bad_response") from exc
         if isinstance(content, list):
             answer = "".join(
                 str(part.get("text", "")) if isinstance(part, dict) else str(part)
@@ -225,36 +306,68 @@ class OpenAICompatibleAdapter:
         payload = self._messages_payload(system, user)
         payload["stream"] = True
         budget = self.max_output_tokens or 0
-        last_exc: Exception | None = None
         for attempt in range(self.max_retries + 1):
+            yielded = False
             try:
-                with request.urlopen(self._build_request(payload), timeout=self.timeout_seconds) as response:
-                    for raw_line in response:
-                        line = raw_line.decode("utf-8").strip()
-                        if not line.startswith("data:"):
-                            continue
-                        data = line[len("data:"):].strip()
-                        if data == "[DONE]":
+                method, url, headers, body = self._request_parts(self._build_request(payload))
+                with httpx.Client(timeout=self._http_timeout(), follow_redirects=False) as client:
+                    with client.stream(method, url, headers=headers, content=body) as response:
+                        if response.status_code >= 400:
+                            failure = _provider_http_error(response.status_code)
+                            if failure.retryable and attempt < self.max_retries:
+                                time.sleep(_retry_after_seconds(response.headers.get("Retry-After"), attempt))
+                                continue
+                            raise failure
+                        complete = False
+                        for line in response.iter_lines():
+                            if not line.startswith("data:"):
+                                continue
+                            data = line[len("data:"):].strip()
+                            if data == "[DONE]":
+                                complete = True
+                                break
+                            try:
+                                chunk = json.loads(data)
+                            except json.JSONDecodeError as exc:
+                                raise LLMError("The model provider sent a malformed stream event.",
+                                               category="provider_bad_response") from exc
+                            if not isinstance(chunk, dict):
+                                raise LLMError("The model provider sent an unexpected stream event.",
+                                               category="provider_bad_response")
+                            if chunk.get("error"):
+                                raise LLMError("The model provider interrupted the response stream.",
+                                               category="provider_stream_interrupted", retryable=not yielded)
+                            try:
+                                delta = chunk.get("choices", [{}])[0].get("delta", {}).get("content")
+                            except (IndexError, TypeError, AttributeError) as exc:
+                                raise LLMError("The model provider sent an unexpected stream event.",
+                                               category="provider_bad_response") from exc
+                            if delta:
+                                yielded = True
+                                yield delta
+                                budget -= max(1, len(delta) // 4)
+                                if self.max_output_tokens and budget <= 0:
+                                    return
+                        if complete:
                             return
-                        try:
-                            chunk = json.loads(data)
-                        except json.JSONDecodeError:
-                            continue
-                        delta = chunk.get("choices", [{}])[0].get("delta", {}).get("content")
-                        if not delta:
-                            continue
-                        yield delta
-                        budget -= len(delta) // 4
-                        if self.max_output_tokens and budget <= 0:
-                            return
-                    return
-            except (error.URLError, error.HTTPError, KeyError, IndexError, json.JSONDecodeError) as exc:
-                last_exc = exc
-                retryable = isinstance(exc, error.HTTPError) and _retryable_http_error(exc)
-                if not retryable or attempt == self.max_retries:
-                    break
-                _backoff_sleep(attempt)
-        raise LLMError("LLM provider stream failed.") from last_exc
+                        if yielded:
+                            raise LLMError("The model provider interrupted the response stream.",
+                                           category="provider_stream_interrupted")
+                        raise httpx.ReadError("The provider closed the stream before sending a completion.")
+            except LLMError as exc:
+                if not exc.retryable or yielded or attempt >= self.max_retries:
+                    raise
+                time.sleep(_retry_after_seconds(None, attempt))
+            except (httpx.TimeoutException, httpx.NetworkError) as exc:
+                if yielded or attempt >= self.max_retries:
+                    category = "provider_stream_interrupted" if yielded else (
+                        "provider_timeout" if isinstance(exc, httpx.TimeoutException) else "provider_connection_error"
+                    )
+                    message = "The model response stream was interrupted. Please retry." if yielded else (
+                        "The model provider could not be reached in time. Please retry shortly."
+                    )
+                    raise LLMError(message, category=category, retryable=not yielded) from exc
+                time.sleep(_retry_after_seconds(None, attempt))
 
 
 class AnthropicAdapter(OpenAICompatibleAdapter):
@@ -495,9 +608,15 @@ class AnswerGenerator:
 
     def __init__(self, provider: str = "gemini", model: str | None = "gemini-3.7-flash", api_key: str | None = None,
                  base_url: str = "https://api.openai.com/v1/chat/completions", timeout_seconds: int = 30,
-                 max_output_tokens: int | None = None) -> None:
+                 max_output_tokens: int | None = None, connect_timeout_seconds: int = 8,
+                 read_timeout_seconds: int | None = None, max_retries: int = 2,
+                 fallback_models: tuple[str, ...] = ()) -> None:
         self.provider = provider.strip().lower()
         self.timeout_seconds = max(5, timeout_seconds)
+        self.connect_timeout_seconds = connect_timeout_seconds
+        self.read_timeout_seconds = read_timeout_seconds or timeout_seconds
+        self.max_retries = max_retries
+        self.fallback_models = fallback_models if self.provider == "openrouter" else ()
         self.max_output_tokens = max_output_tokens
         self._adapter: LLMAdapter | None = self._build_adapter(provider, model, api_key, base_url)
 
@@ -511,7 +630,9 @@ class AnswerGenerator:
             return None
         if normalized in {"openrouter", "openai", "openai_compatible", "openai_compat", "vllm", "triton", "remote", "custom"}:
             return OpenAICompatibleAdapter(model_name, api_key, base_url, self.timeout_seconds,
-                                           self.max_output_tokens)
+                                           self.max_output_tokens, self.max_retries,
+                                           self.connect_timeout_seconds, self.read_timeout_seconds,
+                                           self.fallback_models)
         if normalized == "anthropic":
             return AnthropicAdapter(model_name, api_key, self.timeout_seconds, self.max_output_tokens)
         if normalized == "gemini":

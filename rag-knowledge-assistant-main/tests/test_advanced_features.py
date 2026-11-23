@@ -59,6 +59,7 @@ def test_document_listing_and_grounded_query(monkeypatch, tmp_path):
     payload = query.json()
     assert payload["grounded"] is True
     assert payload["knowledge_gap"] is False
+    assert payload["confidence"] is None
     assert payload["citations"]
     assert "18 days" in payload["answer"]
 
@@ -85,3 +86,7 @@ def test_file_upload_txt(monkeypatch, tmp_path):
     assert response.status_code == 201
     assert response.json()["file_type"] == "txt"
     assert response.json()["chunks_indexed"] >= 1
+    library = client.get("/documents")
+    assert library.status_code == 200
+    assert library.json()["count"] == 1
+    assert library.json()["documents"][0]["chunks"] == response.json()["chunks_indexed"]

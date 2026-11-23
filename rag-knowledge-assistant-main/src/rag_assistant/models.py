@@ -149,7 +149,10 @@ class ContextChunk(BaseModel):
 class QueryResponse(BaseModel):
     answer: str
     grounded: bool
-    confidence: float
+    confidence: float | None = Field(
+        default=None,
+        description="Reserved for calibrated confidence; null until confidence is evaluated against labeled data.",
+    )
     knowledge_gap: bool
     citations: list[Citation] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)

@@ -95,6 +95,10 @@ class AppConfig:
     llm_api_key: str | None = None
     llm_base_url: str = "https://openrouter.ai/api/v1/chat/completions"
     llm_timeout_seconds: int = 30
+    llm_connect_timeout_seconds: int = 8
+    llm_read_timeout_seconds: int = 24
+    llm_max_retries: int = 2
+    llm_fallback_models: tuple[str, ...] = ()
 
     log_level: str = "INFO"
     docs_enabled: bool = True
@@ -151,6 +155,12 @@ class AppConfig:
             llm_api_key=llm_api_key,
             llm_base_url=_env("RAG_LLM_BASE_URL", default_llm_base_url) or default_llm_base_url,
             llm_timeout_seconds=_env_int("RAG_LLM_TIMEOUT_SECONDS", 30),
+            llm_connect_timeout_seconds=_env_int("RAG_LLM_CONNECT_TIMEOUT_SECONDS", 8),
+            llm_read_timeout_seconds=_env_int("RAG_LLM_READ_TIMEOUT_SECONDS", 24),
+            llm_max_retries=_env_int("RAG_LLM_MAX_RETRIES", 2),
+            llm_fallback_models=tuple(
+                model.strip() for model in (_env("RAG_LLM_FALLBACK_MODELS", "") or "").split(",") if model.strip()
+            ),
             log_level=_env("RAG_LOG_LEVEL", "INFO") or "INFO",
             docs_enabled=_env_bool("RAG_DOCS_ENABLED", True),
             allowed_origins=_env_allowed_origins(_env("RAG_ALLOWED_ORIGINS")),

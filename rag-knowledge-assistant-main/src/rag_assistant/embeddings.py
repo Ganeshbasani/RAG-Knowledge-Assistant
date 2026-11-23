@@ -204,6 +204,10 @@ class OnnxTransformerProvider(_BaseProvider):
         if not model_path or not model_path.strip():
             raise ValueError("embedding_model cannot be empty for onnx provider")
 
+        expanded_model_path = Path(model_path).expanduser()
+        if not expanded_model_path.exists():
+            raise EmbeddingProviderError(f"ONNX model path does not exist: {expanded_model_path}")
+
         try:
             import onnxruntime as ort  # type: ignore
         except Exception as exc:  # pragma: no cover - import guard
@@ -218,9 +222,7 @@ class OnnxTransformerProvider(_BaseProvider):
                 "transformers is required for onnx_local provider. Install with `pip install transformers`."
             ) from exc
 
-        self._model_path = str(Path(model_path).expanduser())
-        if not Path(self._model_path).exists():
-            raise EmbeddingProviderError(f"ONNX model path does not exist: {self._model_path}")
+        self._model_path = str(expanded_model_path)
 
         self._tokenizer_path = tokenizer_path or str(Path(self._model_path).parent)
         try:
