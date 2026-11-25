@@ -184,11 +184,10 @@ def _parse_rewrite_answer(answer: str, question: str, max_variants: int) -> list
 def _build_messages(question: str, context: list[dict[str, Any]], citations: list[dict[str, Any]]) -> tuple[str, str]:
     if not context:
         return (
-            "You are Atlas, a helpful general-purpose assistant. No relevant indexed document evidence "
-            "was found for this question. Answer general questions directly using your model knowledge, "
-            "be concise, and label the answer as general knowledge. Never claim that you read or verified "
-            "information in the user's files. If the question specifically depends on those files, say that "
-            "no relevant document evidence was found and ask what the user would like to know about them.",
+            "You are Atlas, a helpful general-purpose assistant. Answer this general question directly, "
+            "naturally, and concisely using your model knowledge. Do not add citations, evidence notices, "
+            "or comments about document retrieval. Never claim that you read or verified information in "
+            "the user's files.",
             f"Question:\n{question}\n\nAnswer helpfully and concisely.",
         )
     citation_text = "\n".join(
@@ -237,6 +236,9 @@ class OpenAICompatibleAdapter:
         self.max_output_tokens = max_output_tokens
         self.max_retries = min(4, max(0, max_retries))
         self.fallback_models = tuple(model.strip() for model in fallback_models if model.strip())
+        # Reuse keep-alive connections across chat turns instead of paying a new
+        # DNS/TLS handshake for every answer.
+        self._client = httpx.Client(timeout=self._http_timeout(), follow_redirects=False)
 
     # ----------------------------------------------------------------- requests
     def _build_request(self, payload: dict[str, Any]) -> request.Request:
@@ -269,8 +271,10 @@ class OpenAICompatibleAdapter:
 
     def _send_json_request(self, payload: dict[str, Any]) -> httpx.Response:
         method, url, headers, body = self._request_parts(self._build_request(payload))
-        with httpx.Client(timeout=self._http_timeout(), follow_redirects=False) as client:
-            return client.request(method, url, headers=headers, content=body)
+        return self._client.request(method, url, headers=headers, content=body)
+
+    def close(self) -> None:
+        self._client.close()
 
     def _request_with_retry(self, payload: dict[str, Any]) -> dict[str, Any]:
         for attempt in range(self.max_retries + 1):
@@ -336,50 +340,49 @@ class OpenAICompatibleAdapter:
             yielded = False
             try:
                 method, url, headers, body = self._request_parts(self._build_request(payload))
-                with httpx.Client(timeout=self._http_timeout(), follow_redirects=False) as client:
-                    with client.stream(method, url, headers=headers, content=body) as response:
-                        if response.status_code >= 400:
-                            failure = _provider_http_error(response.status_code)
-                            if failure.retryable and attempt < self.max_retries:
-                                time.sleep(_retry_after_seconds(response.headers.get("Retry-After"), attempt))
-                                continue
-                            raise failure
-                        complete = False
-                        for line in response.iter_lines():
-                            if not line.startswith("data:"):
-                                continue
-                            data = line[len("data:"):].strip()
-                            if data == "[DONE]":
-                                complete = True
-                                break
-                            try:
-                                chunk = json.loads(data)
-                            except json.JSONDecodeError as exc:
-                                raise LLMError("The model provider sent a malformed stream event.",
-                                               category="provider_bad_response") from exc
-                            if not isinstance(chunk, dict):
-                                raise LLMError("The model provider sent an unexpected stream event.",
-                                               category="provider_bad_response")
-                            if chunk.get("error"):
-                                raise LLMError("The model provider interrupted the response stream.",
-                                               category="provider_stream_interrupted", retryable=not yielded)
-                            try:
-                                delta = chunk.get("choices", [{}])[0].get("delta", {}).get("content")
-                            except (IndexError, TypeError, AttributeError) as exc:
-                                raise LLMError("The model provider sent an unexpected stream event.",
-                                               category="provider_bad_response") from exc
-                            if delta:
-                                yielded = True
-                                yield delta
-                                budget -= max(1, len(delta) // 4)
-                                if self.max_output_tokens and budget <= 0:
-                                    return
-                        if complete:
-                            return
-                        if yielded:
+                with self._client.stream(method, url, headers=headers, content=body) as response:
+                    if response.status_code >= 400:
+                        failure = _provider_http_error(response.status_code)
+                        if failure.retryable and attempt < self.max_retries:
+                            time.sleep(_retry_after_seconds(response.headers.get("Retry-After"), attempt))
+                            continue
+                        raise failure
+                    complete = False
+                    for line in response.iter_lines():
+                        if not line.startswith("data:"):
+                            continue
+                        data = line[len("data:"):].strip()
+                        if data == "[DONE]":
+                            complete = True
+                            break
+                        try:
+                            chunk = json.loads(data)
+                        except json.JSONDecodeError as exc:
+                            raise LLMError("The model provider sent a malformed stream event.",
+                                           category="provider_bad_response") from exc
+                        if not isinstance(chunk, dict):
+                            raise LLMError("The model provider sent an unexpected stream event.",
+                                           category="provider_bad_response")
+                        if chunk.get("error"):
                             raise LLMError("The model provider interrupted the response stream.",
-                                           category="provider_stream_interrupted")
-                        raise httpx.ReadError("The provider closed the stream before sending a completion.")
+                                           category="provider_stream_interrupted", retryable=not yielded)
+                        try:
+                            delta = chunk.get("choices", [{}])[0].get("delta", {}).get("content")
+                        except (IndexError, TypeError, AttributeError) as exc:
+                            raise LLMError("The model provider sent an unexpected stream event.",
+                                           category="provider_bad_response") from exc
+                        if delta:
+                            yielded = True
+                            yield delta
+                            budget -= max(1, len(delta) // 4)
+                            if self.max_output_tokens and budget <= 0:
+                                return
+                    if complete:
+                        return
+                    if yielded:
+                        raise LLMError("The model provider interrupted the response stream.",
+                                       category="provider_stream_interrupted")
+                    raise httpx.ReadError("The provider closed the stream before sending a completion.")
             except LLMError as exc:
                 if not exc.retryable or yielded or attempt >= self.max_retries:
                     raise
@@ -723,3 +726,9 @@ class AnswerGenerator:
             variants = []
         variants = [v.strip() for v in variants if v and v.strip()][:max_variants]
         return variants or _rule_based_variants(question) or [question]
+
+    def close(self) -> None:
+        """Release persistent provider connections during application shutdown."""
+        close = getattr(self._adapter, "close", None)
+        if callable(close):
+            close()

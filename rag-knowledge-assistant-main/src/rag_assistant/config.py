@@ -99,6 +99,7 @@ class AppConfig:
     llm_connect_timeout_seconds: int = 8
     llm_read_timeout_seconds: int = 24
     llm_max_retries: int = 2
+    llm_query_rewrite_enabled: bool = False
     llm_fallback_models: tuple[str, ...] = ()
 
     log_level: str = "INFO"
@@ -160,6 +161,7 @@ class AppConfig:
             llm_connect_timeout_seconds=_env_int("RAG_LLM_CONNECT_TIMEOUT_SECONDS", 8),
             llm_read_timeout_seconds=_env_int("RAG_LLM_READ_TIMEOUT_SECONDS", 24),
             llm_max_retries=_env_int("RAG_LLM_MAX_RETRIES", 2),
+            llm_query_rewrite_enabled=_env_bool("RAG_LLM_QUERY_REWRITE_ENABLED", False),
             llm_fallback_models=tuple(
                 model.strip() for model in (_env("RAG_LLM_FALLBACK_MODELS", "") or "").split(",") if model.strip()
             ),

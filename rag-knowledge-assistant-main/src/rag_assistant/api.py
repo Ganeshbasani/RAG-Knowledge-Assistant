@@ -31,6 +31,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.utils import is_body_allowed_for_status_code
+from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import Receive, Scope, Send
 
@@ -119,7 +120,9 @@ kb = KnowledgeBase(
     metadata_store=create_metadata_store(storage_path=app_config.storage_path, db_url=app_config.db_url),
     reranker=app_config.reranker,
     reranker_model=app_config.reranker_model,
-    query_rewriter=answer_generator.rewrite_query,
+    # An extra model request before every answer noticeably increases first-token
+    # latency. Keep rewriting available as an opt-in for deployments that prefer it.
+    query_rewriter=answer_generator.rewrite_query if app_config.llm_query_rewrite_enabled else None,
 )
 
 logging.basicConfig(level=getattr(logging, app_config.log_level.upper(), logging.INFO),
@@ -146,6 +149,7 @@ app = FastAPI(
 @app.on_event("shutdown")
 def close_application_resources() -> None:
     """Close database and vector-store clients cleanly on process shutdown."""
+    answer_generator.close()
     kb.close()
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -533,6 +537,32 @@ def _diagnose_sources(chunks: list) -> tuple[list[str], bool]:
     return warnings, False
 
 
+_GENERAL_REQUEST = re.compile(r"\b(?:in general|generally|outside (?:my|the) (?:documents?|files?)|not based on (?:my|the) (?:documents?|files?))\b", re.IGNORECASE)
+_DOCUMENT_REQUEST = re.compile(
+    r"\b(?:my|the|this|that|attached|uploaded|provided)\s+(?:knowledge\s+)?"
+    r"(?:documents?|files?|pdfs?|resumes?|cv|reports?|contracts?|policies|notes|sources?)\b"
+    r"|\b(?:according to|based on|from|within|across|in)\s+(?:my|the|this|that|attached|uploaded|provided)?\s*"
+    r"(?:documents?|files?|pdfs?|resumes?|cv|reports?|contracts?|policies|notes|sources?)\b"
+    r"|\bwhat (?:does|do) (?:the|this|that|my|attached|uploaded)?\s*"
+    r"(?:document|file|pdf|resume|cv|report|contract|policy)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_document_scoped_question(question: str) -> bool:
+    """Treat explicit file/document requests as grounded; answer other asks generally."""
+    if _GENERAL_REQUEST.search(question):
+        return False
+    return bool(_DOCUMENT_REQUEST.search(question))
+
+
+def _is_document_scoped_request(question: str, payload: QueryRequest) -> bool:
+    """An attachment or explicit metadata filter makes this turn document-scoped."""
+    if _GENERAL_REQUEST.search(question):
+        return False
+    return bool(payload.metadata_filter) or _is_document_scoped_question(question)
+
+
 def _dedup_context(chunks: list) -> list:
     """Collapse near-duplicate context chunks (SequenceMatcher > 0.85) — keeps order."""
     if len(chunks) < 2:
@@ -604,25 +634,37 @@ def _grounded_status(answer: str, citations: list[Citation], context: list[Conte
 
 def _build_response(question: str, chunks: list, trace: dict, payload: QueryRequest,
                     request_id: str | None = None) -> QueryResponse:
+    document_scoped = _is_document_scoped_request(question, payload)
+    general_question = payload.generate and not document_scoped
+    if general_question:
+        chunks = []
+        trace = {**trace, "retrieval": "general_knowledge", "returned_chunks": 0, "stages": []}
     chunks = _trim_context(_dedup_context(chunks), payload.context_max_tokens)
     context = [ContextChunk(source_id=c.source_id, chunk_index=c.chunk_index, text=_strip_page_markers(c.text),
                              score=round(c.score, 4), metadata=c.metadata) for c in chunks]
     citations = _source_citations(chunks)
-    warnings, knowledge_gap = _diagnose_sources(chunks)
+    warnings, knowledge_gap = ([], False) if general_question else _diagnose_sources(chunks)
     # Confidence is intentionally null until a representative labeled evaluation
     # set is used to calibrate a probability. Retrieval scores are not probabilities.
     confidence = None
-    if knowledge_gap and (not payload.generate or not answer_generator.enabled):
+    if general_question and not answer_generator.enabled:
+        return QueryResponse(
+            answer="General answers are unavailable because no model provider is configured on this server.",
+            grounded=False, confidence=confidence, knowledge_gap=False, citations=[], warnings=[], context=[],
+            count=0, generation={"provider": "none", "used_llm": False}, trace=trace,
+        )
+    if knowledge_gap and (not payload.generate or not answer_generator.enabled
+                          or document_scoped):
         answer = ("I couldn't find a relevant passage in the indexed documents for that question. "
                   "Try asking about a specific topic, or attach the file you want me to use.")
-        if not chunks and payload.generate:
+        if not chunks and payload.generate and not document_scoped:
             answer = ("I don't have a language model configured to answer this without document evidence. "
                       "Configure the server-side model provider, then try again.")
         return QueryResponse(answer=answer, grounded=False, confidence=confidence, knowledge_gap=True,
                              citations=citations, warnings=list(dict.fromkeys(warnings)), context=context,
                              count=len(context), generation={"provider": "none", "used_llm": False}, trace=trace)
 
-    if not chunks:
+    if not chunks and not general_question:
         warnings = [warning for warning in warnings if warning != "No sufficiently relevant evidence was retrieved."]
         warnings.append("No document evidence matched; this answer uses general model knowledge.")
 
@@ -746,12 +788,9 @@ async def ingest_file(request: Request, file: UploadFile = File(...),
     if raw is None:
         raise HTTPException(status_code=413, detail="Uploaded file exceeds the configured size limit.")
     try:
-        parsed = parse_document(filename, raw, source_id)
-        stored_name = f"{parsed.metadata.get('content_hash', 'document')}{Path(filename).suffix.lower()}"
-        parsed.metadata["stored_file"] = stored_name
-        result = kb.ingest_with_info(parsed.source_id, parsed.content, chunk_size=chunk_size,
-                                     chunk_overlap=chunk_overlap, chunking_strategy="smart",
-                                     metadata=parsed.metadata, workspace_id=workspace_id)
+        parsed, stored_name, result = await run_in_threadpool(
+            _parse_and_index_upload, filename, raw, source_id, chunk_size, chunk_overlap, workspace_id
+        )
     except DocumentProcessingError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ValueError as exc:
@@ -763,11 +802,27 @@ async def ingest_file(request: Request, file: UploadFile = File(...),
     # cannot leave orphaned files behind.
     try:
         upload_dir = Path(app_config.upload_dir).expanduser()
-        upload_dir.mkdir(parents=True, exist_ok=True)
-        (upload_dir / stored_name).write_bytes(raw)
+        await run_in_threadpool(_persist_uploaded_file, upload_dir, stored_name, raw)
     except OSError:
         logger.warning("Could not persist uploaded artifact for %s", parsed.source_id)
     return FileIngestResponse(**result, filename=filename, file_type=Path(filename).suffix.lstrip("."))
+
+
+def _parse_and_index_upload(filename: str, raw: bytes, source_id: str | None, chunk_size: int,
+                            chunk_overlap: int, workspace_id: str | None) -> tuple[Any, str, dict[str, Any]]:
+    """Run CPU-heavy extraction and synchronous indexing outside the event loop."""
+    parsed = parse_document(filename, raw, source_id)
+    stored_name = f"{parsed.metadata.get('content_hash', 'document')}{Path(filename).suffix.lower()}"
+    parsed.metadata["stored_file"] = stored_name
+    result = kb.ingest_with_info(parsed.source_id, parsed.content, chunk_size=chunk_size,
+                                 chunk_overlap=chunk_overlap, chunking_strategy="smart",
+                                 metadata=parsed.metadata, workspace_id=workspace_id)
+    return parsed, stored_name, result
+
+
+def _persist_uploaded_file(upload_dir: Path, stored_name: str, raw: bytes) -> None:
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    (upload_dir / stored_name).write_bytes(raw)
 
 
 async def _read_upload_limited(file: UploadFile, max_bytes: int) -> bytes | None:
@@ -840,9 +895,14 @@ def _sse_event(payload: dict) -> str:
     return f"data: {json.dumps(payload)}\n\n"
 
 
-def _retrieve_for_query(payload: QueryRequest, workspace_id: str | None) -> tuple[list, dict[str, Any]]:
+def _retrieve_for_query(payload: QueryRequest, workspace_id: str | None,
+                        question: str | None = None) -> tuple[list, dict[str, Any]]:
     """Use corpus sampling for broad summaries; use ranked search otherwise."""
-    if KnowledgeBase.is_document_overview_question(payload.question):
+    question = question or payload.question
+    if payload.generate and not _is_document_scoped_request(question, payload):
+        return [], {"retrieval": "general_knowledge", "reranker": payload.reranker,
+                    "returned_chunks": 0, "stages": []}
+    if KnowledgeBase.is_document_overview_question(question):
         chunks = kb.document_overview_chunks(top_k=payload.top_k, metadata_filter=payload.metadata_filter,
                                              workspace_id=workspace_id)
         return chunks, {
@@ -851,7 +911,7 @@ def _retrieve_for_query(payload: QueryRequest, workspace_id: str | None) -> tupl
             "returned_chunks": len(chunks),
             "stages": [{"stage": "document_overview", "candidates": len(chunks)}],
         }
-    return kb.query_with_trace(payload.question, top_k=payload.top_k, min_score=payload.min_score,
+    return kb.query_with_trace(question, top_k=payload.top_k, min_score=payload.min_score,
                                retrieval=payload.retrieval, embedding_model=payload.embedding_model,
                                embedding_provider=payload.embedding_provider,
                                local_dimensions=payload.local_dimensions, reranker=payload.reranker,
@@ -864,7 +924,7 @@ def _stream_query(payload: QueryRequest, request: Request) -> Iterator[str]:
     workspace_id = getattr(request.state, "workspace_id", None)
     question = kb.augment_with_history(payload.session_id, payload.question)
     try:
-        chunks, trace = _retrieve_for_query(payload, workspace_id)
+        chunks, trace = _retrieve_for_query(payload, workspace_id, question)
         logger.info("retrieval_complete request_id=%s retrieval=%s candidates=%s returned=%s",
                     getattr(request.state, "request_id", "-"), trace.get("retrieval"),
                     trace.get("candidates_considered", 0), len(chunks))
@@ -874,7 +934,7 @@ def _stream_query(payload: QueryRequest, request: Request) -> Iterator[str]:
         return
     chunks = _trim_context(_dedup_context(chunks), payload.context_max_tokens)
 
-    if not chunks:
+    if not chunks and _is_document_scoped_request(question, payload):
         response = _build_response(question, chunks, trace, payload, request_id=getattr(request.state, "request_id", None))
         yield _sse_event({"type": "done", "response": response.model_dump()})
         if payload.session_id:
@@ -887,7 +947,8 @@ def _stream_query(payload: QueryRequest, request: Request) -> Iterator[str]:
         yield _sse_event({"type": "done", "response": response.model_dump()})
         return
 
-    warnings, knowledge_gap = _diagnose_sources(chunks)
+    general_question = not _is_document_scoped_request(question, payload)
+    warnings, knowledge_gap = ([], False) if general_question else _diagnose_sources(chunks)
     confidence = None
 
     if knowledge_gap and not answer_generator.enabled:
@@ -955,10 +1016,14 @@ def _stream_query(payload: QueryRequest, request: Request) -> Iterator[str]:
 def query(payload: QueryRequest, request: Request) -> QueryResponse | StreamingResponse:
     workspace_id = getattr(request.state, "workspace_id", None)
     if payload.stream:
-        return StreamingResponse(_stream_query(payload, request), media_type="text/event-stream")
+        return StreamingResponse(
+            _stream_query(payload, request),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"},
+        )
     try:
         question = kb.augment_with_history(payload.session_id, payload.question)
-        chunks, trace = _retrieve_for_query(payload, workspace_id)
+        chunks, trace = _retrieve_for_query(payload, workspace_id, question)
         logger.info("retrieval_complete request_id=%s retrieval=%s candidates=%s returned=%s",
                     getattr(request.state, "request_id", "-"), trace.get("retrieval"),
                     trace.get("candidates_considered", 0), len(chunks))

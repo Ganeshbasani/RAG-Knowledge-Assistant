@@ -117,12 +117,10 @@ async function ask(){
   $('sendBtn').disabled=false;$('sendBtn').textContent='■';$('sendBtn').title='Stop sending';$('sendBtn').classList.add('stopping');
   let submitted=false,pending=null,answer='';
   try{
-    for(const item of staged){
-      if(item.state==='indexed')continue;
-      item.state='indexing';item.attempted=true;renderAttachments();setLive('Adding '+item.name);
-      try{const indexed=await uploadAttachment(item,state.abortController.signal);item.indexedChunks=Number(indexed?.chunks_indexed)||0;if(item.indexedChunks<1)throw Error(item.name+' was uploaded but produced no searchable text. Try a text-based PDF or paste its text instead.')}catch(error){item.state=state.abortController.signal.aborted?'queued':'failed';item.error=error.message;renderAttachments();throw error}
-      item.state='indexed';item.error='';renderAttachments();
-    }
+    const uploadQueue=staged.filter(item=>item.state!=='indexed');let uploadIndex=0,uploadFailure=null;
+    const uploadWorker=async()=>{while(uploadIndex<uploadQueue.length&&!uploadFailure){const item=uploadQueue[uploadIndex++];item.state='indexing';item.attempted=true;renderAttachments();setLive(`Adding ${item.name} · ${uploadIndex}/${uploadQueue.length}`);try{const indexed=await uploadAttachment(item,state.abortController.signal);item.indexedChunks=Number(indexed?.chunks_indexed)||0;if(item.indexedChunks<1)throw Error(item.name+' was uploaded but produced no searchable text. Try a text-based PDF or paste its text instead.');item.state='indexed';item.error=''}catch(error){item.state=state.abortController.signal.aborted?'queued':'failed';item.error=error.message;uploadFailure=error}finally{renderAttachments()}}};
+    await Promise.all(Array.from({length:Math.min(3,uploadQueue.length)},uploadWorker));
+    if(uploadFailure)throw uploadFailure;
     if(state.abortController.signal.aborted)throw new DOMException('Stopped','AbortError');
     if(staged.length)await loadLibrary();
     const savedAttachments=staged.map(item=>({name:item.name,fileType:item.fileType,size:item.size}));
@@ -138,8 +136,9 @@ async function ask(){
     const response=await fetch('/query',{method:'POST',headers:headers(true),body:JSON.stringify(payload),signal:state.abortController.signal});
     if(!response.ok){const error=await response.json().catch(()=>({}));handleExpiredSession(response);throw Error(error.detail||error.message||'Request failed ('+response.status+')')}
     if(!response.body)throw Error('The server did not return a response stream.');
-    const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='',final=null;
-    for(;;){const{done,value}=await reader.read();if(done)break;buffer+=decoder.decode(value,{stream:true});const lines=buffer.split('\n');buffer=lines.pop()||'';for(const line of lines){if(!line.startsWith('data:'))continue;let event;try{event=JSON.parse(line.slice(5).trim())}catch{continue}if(event.type==='delta'){answer+=event.text;pending.querySelector('.answer').innerHTML=renderMarkdown(answer);$('feed').scrollTop=$('feed').scrollHeight}else if(event.type==='replace'){answer=event.text||'';pending.querySelector('.answer').innerHTML=renderMarkdown(answer)}else if(event.type==='done')final=event.response;else if(event.type==='error')throw Error(event.message||'Document search failed. Please retry.')}}
+    const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='',final=null,renderQueued=false;
+    const renderStreamedAnswer=()=>{if(renderQueued)return;renderQueued=true;requestAnimationFrame(()=>{renderQueued=false;if(!pending?.isConnected)return;pending.querySelector('.answer').innerHTML=renderMarkdown(answer);$('feed').scrollTop=$('feed').scrollHeight})};
+    for(;;){const{done,value}=await reader.read();if(done)break;buffer+=decoder.decode(value,{stream:true});const lines=buffer.split('\n');buffer=lines.pop()||'';for(const line of lines){if(!line.startsWith('data:'))continue;let event;try{event=JSON.parse(line.slice(5).trim())}catch{continue}if(event.type==='delta'){answer+=event.text;renderStreamedAnswer()}else if(event.type==='replace'){answer=event.text||'';renderStreamedAnswer()}else if(event.type==='done')final=event.response;else if(event.type==='error')throw Error(event.message||'Document search failed. Please retry.')}}
     buffer+=decoder.decode();if(buffer.startsWith('data:')){try{const event=JSON.parse(buffer.slice(5).trim());if(event.type==='done')final=event.response}catch{}}
     if(!final||!String(final.answer||'').trim()){
       setLive('Recovering response');
