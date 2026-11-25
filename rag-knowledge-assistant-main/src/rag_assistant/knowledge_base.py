@@ -459,6 +459,35 @@ class KnowledgeBase:
             records = [record for record in records if record.workspace_id == workspace_id]
         return [record.as_summary() for record in records]
 
+    @staticmethod
+    def is_document_overview_question(question: str) -> bool:
+        action = re.search(r"\b(summar(?:y|ize|ise)|overview|explain|exaplian|describe)\b", question, re.IGNORECASE)
+        target = re.search(r"\b(doc(?:ument)?s?|files?|library|attachments?)\b", question, re.IGNORECASE)
+        return bool(action and target)
+
+    def document_overview_chunks(self, *, top_k: int = 5, metadata_filter: dict[str, Any] | None = None,
+                                 workspace_id: str | None = None) -> list[RetrievedChunk]:
+        """Return one leading passage per matching document for broad summaries.
+
+        Generic overview questions have few useful search terms. Sampling each
+        matching document avoids making the summary depend on an arbitrary
+        semantic-score threshold or one accidental nearest neighbor.
+        """
+        filters = self._workspace_filter(workspace_id, metadata_filter)
+        with self._lock:
+            selected: list[RetrievedChunk] = []
+            seen_sources: set[str] = set()
+            for chunk in self._chunks:
+                source_id = chunk["source_id"]
+                if source_id in seen_sources or not self._matches_filter(chunk.get("metadata", {}), filters):
+                    continue
+                seen_sources.add(source_id)
+                selected.append(RetrievedChunk(source_id, chunk["chunk_index"], chunk["text"], 1.0,
+                                               chunk.get("metadata", {})))
+                if len(selected) >= max(1, min(top_k, 20)):
+                    break
+            return selected
+
     def workspaces(self) -> list[tuple[str, str]]:
         return self._metadata_store.list_workspaces()
 

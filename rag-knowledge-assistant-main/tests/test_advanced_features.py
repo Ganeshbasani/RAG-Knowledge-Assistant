@@ -27,6 +27,24 @@ def test_zero_score_results_are_filtered():
     assert kb.query("quantum mechanics", retrieval="tfidf", min_score=0.0) == []
 
 
+def test_document_overview_uses_all_matching_files_and_filename_filter():
+    kb = KnowledgeBase()
+    kb.ingest("resume", "Professional summary of the candidate.",
+              metadata={"filename": "resume.pdf", "workspace_id": "ws-a"})
+    kb.ingest("project", "Project overview and implementation details.",
+              metadata={"filename": "project.pdf", "workspace_id": "ws-a"})
+    kb.ingest("other-workspace", "Private passage.",
+              metadata={"filename": "private.pdf", "workspace_id": "ws-b"})
+
+    library = kb.document_overview_chunks(top_k=5, workspace_id="ws-a")
+    attached = kb.document_overview_chunks(top_k=5, metadata_filter={"filename": ["project.pdf"]},
+                                           workspace_id="ws-a")
+
+    assert {chunk.source_id for chunk in library} == {"resume", "project"}
+    assert [chunk.source_id for chunk in attached] == ["project"]
+    assert KnowledgeBase.is_document_overview_question("Give me a concise overview of my documents")
+
+
 def test_ingest_zero_overlap_and_replace_existing():
     kb = KnowledgeBase(chunk_size=10, chunk_overlap=2)
     first = kb.ingest_with_info("doc", "one two three four five", chunk_overlap=0)
@@ -84,6 +102,40 @@ def test_document_listing_and_grounded_query(monkeypatch, tmp_path):
     assert unknown.status_code == 200
     assert unknown.json()["knowledge_gap"] is True
     assert unknown.json()["grounded"] is False
+
+
+def test_general_question_uses_model_when_no_documents_match(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    monkeypatch.setenv("RAG_STORAGE_PATH", str(tmp_path / "empty-index.json"))
+    monkeypatch.setenv("RAG_ENV", "development")
+    monkeypatch.setenv("RAG_LLM_PROVIDER", "extractive")
+    monkeypatch.delenv("RAG_API_KEY", raising=False)
+    monkeypatch.delenv("RAG_JWT_SECRET", raising=False)
+    monkeypatch.delenv("RAG_UI_PASSWORD", raising=False)
+    sys.modules.pop("rag_assistant.api", None)
+    importlib.invalidate_caches()
+    api_module = importlib.import_module("rag_assistant.api")
+
+    class StubGenerator:
+        enabled = True
+        provider = "stub"
+        model = "test-model"
+
+        def generate(self, question, context, citations):
+            assert context == []
+            assert citations == []
+            return SimpleNamespace(answer="RAG combines retrieval with text generation.", provider=self.provider,
+                                   model=self.model, latency_ms=1.0, used_llm=True)
+
+    monkeypatch.setattr(api_module, "answer_generator", StubGenerator())
+    with TestClient(api_module.app) as client:
+        response = client.post("/query", json={"question": "What is RAG?", "stream": False})
+
+    assert response.status_code == 200
+    assert "combines retrieval" in response.json()["answer"]
+    assert response.json()["knowledge_gap"] is True
+    assert any("general model knowledge" in warning for warning in response.json()["warnings"])
 
 
 def test_file_upload_txt(monkeypatch, tmp_path):

@@ -10,6 +10,10 @@ from fastapi.testclient import TestClient
 @pytest.fixture
 def fresh_client(monkeypatch, tmp_path):
     monkeypatch.setenv("RAG_STORAGE_PATH", str(tmp_path / "index.json"))
+    monkeypatch.setenv("RAG_LLM_PROVIDER", "extractive")
+    monkeypatch.delenv("RAG_LLM_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("RAG_API_KEY", raising=False)
 
     sys.modules.pop("rag_assistant.api", None)
@@ -36,12 +40,12 @@ def test_health_and_healthz_smoke(fresh_client):
     assert healthz_payload["version"] == payload["version"]
 
 
-def test_query_returns_404_without_documents(fresh_client):
+def test_query_without_documents_returns_clear_setup_response(fresh_client):
     response = fresh_client.post("/query", json={"question": "What is RAG?", "top_k": 3})
-    assert response.status_code == 404
+    assert response.status_code == 200
     payload = response.json()
-    assert payload["error_code"] == "not_found"
-    assert payload["path"] == "/query"
+    assert payload["knowledge_gap"] is True
+    assert "language model configured" in payload["answer"]
 
 
 def test_query_returns_result_for_ingested_content(fresh_client):

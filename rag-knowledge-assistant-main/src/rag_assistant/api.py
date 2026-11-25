@@ -612,12 +612,19 @@ def _build_response(question: str, chunks: list, trace: dict, payload: QueryRequ
     # Confidence is intentionally null until a representative labeled evaluation
     # set is used to calibrate a probability. Retrieval scores are not probabilities.
     confidence = None
-    if knowledge_gap and (not payload.generate or not answer_generator.enabled or not chunks):
+    if knowledge_gap and (not payload.generate or not answer_generator.enabled):
         answer = ("I couldn't find a relevant passage in the indexed documents for that question. "
                   "Try asking about a specific topic, or attach the file you want me to use.")
+        if not chunks and payload.generate:
+            answer = ("I don't have a language model configured to answer this without document evidence. "
+                      "Configure the server-side model provider, then try again.")
         return QueryResponse(answer=answer, grounded=False, confidence=confidence, knowledge_gap=True,
                              citations=citations, warnings=list(dict.fromkeys(warnings)), context=context,
                              count=len(context), generation={"provider": "none", "used_llm": False}, trace=trace)
+
+    if not chunks:
+        warnings = [warning for warning in warnings if warning != "No sufficiently relevant evidence was retrieved."]
+        warnings.append("No document evidence matched; this answer uses general model knowledge.")
 
     if not payload.generate:
         return QueryResponse(answer="Relevant evidence retrieved. Generation was disabled for this request.",
@@ -833,17 +840,31 @@ def _sse_event(payload: dict) -> str:
     return f"data: {json.dumps(payload)}\n\n"
 
 
+def _retrieve_for_query(payload: QueryRequest, workspace_id: str | None) -> tuple[list, dict[str, Any]]:
+    """Use corpus sampling for broad summaries; use ranked search otherwise."""
+    if KnowledgeBase.is_document_overview_question(payload.question):
+        chunks = kb.document_overview_chunks(top_k=payload.top_k, metadata_filter=payload.metadata_filter,
+                                             workspace_id=workspace_id)
+        return chunks, {
+            "retrieval": "document_overview",
+            "reranker": payload.reranker,
+            "returned_chunks": len(chunks),
+            "stages": [{"stage": "document_overview", "candidates": len(chunks)}],
+        }
+    return kb.query_with_trace(payload.question, top_k=payload.top_k, min_score=payload.min_score,
+                               retrieval=payload.retrieval, embedding_model=payload.embedding_model,
+                               embedding_provider=payload.embedding_provider,
+                               local_dimensions=payload.local_dimensions, reranker=payload.reranker,
+                               candidate_pool_size=payload.candidate_pool_size,
+                               metadata_filter=payload.metadata_filter, workspace_id=workspace_id)
+
+
 def _stream_query(payload: QueryRequest, request: Request) -> Iterator[str]:
     """Yield SSE events for a streaming query: deltas, then a final done event."""
     workspace_id = getattr(request.state, "workspace_id", None)
     question = kb.augment_with_history(payload.session_id, payload.question)
     try:
-        chunks, trace = kb.query_with_trace(payload.question, top_k=payload.top_k, min_score=payload.min_score,
-                                            retrieval=payload.retrieval, embedding_model=payload.embedding_model,
-                                            embedding_provider=payload.embedding_provider,
-                                            local_dimensions=payload.local_dimensions, reranker=payload.reranker,
-                                            candidate_pool_size=payload.candidate_pool_size,
-                                            metadata_filter=payload.metadata_filter, workspace_id=workspace_id)
+        chunks, trace = _retrieve_for_query(payload, workspace_id)
         logger.info("retrieval_complete request_id=%s retrieval=%s candidates=%s returned=%s",
                     getattr(request.state, "request_id", "-"), trace.get("retrieval"),
                     trace.get("candidates_considered", 0), len(chunks))
@@ -933,26 +954,17 @@ def _stream_query(payload: QueryRequest, request: Request) -> Iterator[str]:
 @app.post("/query", response_model=QueryResponse, dependencies=[Depends(_guard_api_key)])
 def query(payload: QueryRequest, request: Request) -> QueryResponse | StreamingResponse:
     workspace_id = getattr(request.state, "workspace_id", None)
-    if kb.stats()["chunks"] == 0:
-        raise HTTPException(status_code=404, detail="No documents are indexed. Upload or ingest a document first.")
     if payload.stream:
         return StreamingResponse(_stream_query(payload, request), media_type="text/event-stream")
     try:
         question = kb.augment_with_history(payload.session_id, payload.question)
-        chunks, trace = kb.query_with_trace(payload.question, top_k=payload.top_k, min_score=payload.min_score,
-                                            retrieval=payload.retrieval, embedding_model=payload.embedding_model,
-                                            embedding_provider=payload.embedding_provider,
-                                            local_dimensions=payload.local_dimensions, reranker=payload.reranker,
-                                            candidate_pool_size=payload.candidate_pool_size,
-                                            metadata_filter=payload.metadata_filter, workspace_id=workspace_id)
+        chunks, trace = _retrieve_for_query(payload, workspace_id)
         logger.info("retrieval_complete request_id=%s retrieval=%s candidates=%s returned=%s",
                     getattr(request.state, "request_id", "-"), trace.get("retrieval"),
                     trace.get("candidates_considered", 0), len(chunks))
     except Exception as exc:
         logger.exception("Query failed")
         raise HTTPException(status_code=503, detail="Query processing failed. Check embedding configuration.") from exc
-    if not chunks and kb.stats()["chunks"] == 0:
-        raise HTTPException(status_code=404, detail="No documents are indexed. Upload or ingest a document first.")
     response = _build_response(question, chunks, trace, payload, request_id=getattr(request.state, "request_id", None))
     if payload.session_id:
         kb.record_turn(payload.session_id, "user", payload.question)

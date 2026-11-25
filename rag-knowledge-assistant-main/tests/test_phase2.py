@@ -10,7 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from rag_assistant.knowledge_base import KnowledgeBase
-from rag_assistant.llm import AnswerGenerator, LLMError, _rule_based_variants, extractive_fallback
+from rag_assistant.llm import AnswerGenerator, LLMError, _build_messages, _rule_based_variants, extractive_fallback
 from rag_assistant.sessions import SessionStore
 
 
@@ -78,6 +78,14 @@ def test_extractive_fallback_maps_qualification_to_education_terms():
     }])
 
     assert "B.Tech in Computer Science" in answer
+
+
+def test_general_answer_prompt_does_not_force_irrelevant_document_evidence():
+    system, user = _build_messages("What is RAG?", [], [])
+
+    assert "answer helpfully from model knowledge" in system
+    assert "label it as general knowledge" in system
+    assert "What is RAG?" in user
 
 
 def test_kb_multiquery_retrieves_variant_terms():
