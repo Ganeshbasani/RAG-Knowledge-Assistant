@@ -86,6 +86,7 @@ class AppConfig:
 
     # Multi-user auth (Phase 4.1)
     jwt_secret: str | None = None
+    ui_password: str | None = None
     jwt_token_ttl_seconds: int = 3600
     jwt_issuer: str = "rag-knowledge-assistant"
     workspace_default: str = "default"
@@ -147,6 +148,7 @@ class AppConfig:
             or "cross-encoder/ms-marco-MiniLM-L-6-v2",
             llm_max_output_tokens=(_env_int("RAG_LLM_MAX_OUTPUT_TOKENS", 0) or None),
             jwt_secret=_env("RAG_JWT_SECRET"),
+            ui_password=_env("RAG_UI_PASSWORD"),
             jwt_token_ttl_seconds=_env_int("RAG_JWT_TTL_SECONDS", 3600),
             jwt_issuer=_env("RAG_JWT_ISSUER", "rag-knowledge-assistant") or "rag-knowledge-assistant",
             workspace_default=_env("RAG_WORKSPACE_DEFAULT", "default") or "default",

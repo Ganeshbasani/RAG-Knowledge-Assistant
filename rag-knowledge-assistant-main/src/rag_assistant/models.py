@@ -267,6 +267,15 @@ class TokenResponse(BaseModel):
     token: str
 
 
+class BrowserSessionRequest(BaseModel):
+    password: str = Field(min_length=1, max_length=512)
+
+
+class AuthConfigResponse(BaseModel):
+    auth_required: bool
+    browser_login_enabled: bool
+
+
 class SessionsListResponse(BaseModel):
     sessions: list[str]
     count: int

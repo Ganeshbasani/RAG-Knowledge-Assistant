@@ -40,7 +40,7 @@ def test_semantic_vectors_survive_restart_without_reembedding(tmp_path, monkeypa
                     local_dimensions=24)
     persisted_vectors = dict(kb._vectors)
     persisted_key = kb._vector_key
-    assert persisted_vectors and persisted_key == ("local_hash", None, 24)
+    assert persisted_vectors and persisted_key == ("local_hash_v2", None, 24)
 
     reloaded = KnowledgeBase(storage_path=str(storage_path))
     assert reloaded._vectors == persisted_vectors

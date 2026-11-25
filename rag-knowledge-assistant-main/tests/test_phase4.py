@@ -40,9 +40,54 @@ def api_client(monkeypatch, tmp_path):
 
 def test_auth_requires_valid_key_or_token(api_client):
     client, _ = api_client
+    assert client.get("/auth/config").json() == {"auth_required": True, "browser_login_enabled": False}
     assert client.get("/stats").status_code == 401
     assert client.get("/stats", headers={"x-api-key": "wrong"}).status_code == 401
     assert client.get("/stats", headers={"x-api-key": "admin-key"}).status_code == 200
+
+
+@pytest.fixture
+def browser_login_client(monkeypatch, tmp_path):
+    monkeypatch.setenv("RAG_STORAGE_PATH", str(tmp_path / "index.json"))
+    monkeypatch.setenv("RAG_UPLOAD_DIR", str(tmp_path / "uploads"))
+    monkeypatch.setenv("RAG_ENV", "development")
+    monkeypatch.delenv("RAG_API_KEY", raising=False)
+    monkeypatch.setenv("RAG_UI_PASSWORD", "demo-passphrase")
+    monkeypatch.setenv("RAG_JWT_SECRET", "a-long-enough-browser-session-secret-for-tests")
+    sys.modules.pop("rag_assistant.api", None)
+    importlib.invalidate_caches()
+    api_module = importlib.import_module("rag_assistant.api")
+    with TestClient(api_module.app) as client:
+        yield client, api_module
+
+
+def test_browser_login_mints_scoped_session_without_exposing_server_api_key(browser_login_client):
+    client, _ = browser_login_client
+    assert client.get("/auth/config").json() == {"auth_required": True, "browser_login_enabled": True}
+    assert client.get("/documents").status_code == 401
+    assert client.post("/auth/session", json={"password": "wrong"}).status_code == 401
+    login = client.post("/auth/session", json={"password": "demo-passphrase"})
+    assert login.status_code == 200
+    token = login.json()["token"]
+    assert token and "demo-passphrase" not in token
+    headers = {"Authorization": f"Bearer {token}"}
+    assert client.get("/documents", headers=headers).status_code == 200
+    assert client.post("/auth/token", headers=headers,
+                       json={"user_id": "attacker", "workspace_id": "other-workspace"}).status_code == 403
+
+
+def test_public_demo_reports_auth_disabled_and_accepts_browser_requests(monkeypatch, tmp_path):
+    monkeypatch.setenv("RAG_STORAGE_PATH", str(tmp_path / "index.json"))
+    monkeypatch.setenv("RAG_UPLOAD_DIR", str(tmp_path / "uploads"))
+    monkeypatch.setenv("RAG_ENV", "development")
+    for name in ("RAG_API_KEY", "RAG_UI_PASSWORD", "RAG_JWT_SECRET"):
+        monkeypatch.delenv(name, raising=False)
+    sys.modules.pop("rag_assistant.api", None)
+    importlib.invalidate_caches()
+    api_module = importlib.import_module("rag_assistant.api")
+    with TestClient(api_module.app) as client:
+        assert client.get("/auth/config").json() == {"auth_required": False, "browser_login_enabled": False}
+        assert client.get("/documents").status_code == 200
 
 
 def test_jwt_workspace_isolation(api_client):

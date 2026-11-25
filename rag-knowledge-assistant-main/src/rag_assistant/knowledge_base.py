@@ -35,6 +35,14 @@ SENTENCE_PATTERN = r"(?<=[.!?])\s+"
 PARAGRAPH_PATTERN = r"\n\s*\n+"
 _SENTENCE_RE = re.compile(SENTENCE_PATTERN)
 _PARAGRAPH_RE = re.compile(PARAGRAPH_PATTERN)
+_BM25_STOP_WORDS = frozenset({
+    "a", "an", "and", "are", "as", "at", "be", "been", "being", "but", "by", "can", "could",
+    "did", "do", "does", "for", "from", "had", "has", "have", "he", "her", "here", "hers", "him",
+    "his", "how", "i", "if", "in", "into", "is", "it", "its", "me", "my", "of", "on", "or",
+    "our", "ours", "she", "should", "so", "that", "the", "their", "them", "there", "these", "they",
+    "this", "those", "to", "was", "we", "were", "what", "when", "where", "which", "who", "why",
+    "will", "with", "would", "you", "your",
+})
 SUPPORTED_CHUNKING_STRATEGIES = {"tokens", "sentence", "paragraph", "smart"}
 SUPPORTED_RETRIEVAL_MODES = {"tfidf", "semantic", "hybrid"}
 SUPPORTED_RERANKERS = {"none", "term_overlap", "cross_encoder"}
@@ -480,7 +488,7 @@ class KnowledgeBase:
         if normalized == "local_tfidf":
             return normalized, None, local_dimensions or 256
         if normalized in {"local", "local_hash", "hash"}:
-            return "local_hash", None, local_dimensions or 64
+            return "local_hash_v2", None, local_dimensions or 64
         if normalized in {"onnx", "onnx_local"}:
             return "onnx_local", (embedding_model or "").strip(), local_dimensions or 256
         return "sentence_transformers", (embedding_model or self._default_embedding_model).strip(), None
@@ -549,7 +557,7 @@ class KnowledgeBase:
 
     def _query_bm25(self, question: str, top_k: int, min_score: float,
                     metadata_filter: dict[str, Any] | None = None) -> list[RetrievedChunk]:
-        question_tokens = KnowledgeBase._tokenize(question)
+        question_tokens = [token for token in KnowledgeBase._tokenize(question) if token not in _BM25_STOP_WORDS]
         if not question_tokens:
             return []
         chunk_by_key = {(c["source_id"], c["chunk_index"]): c for c in self._chunks}
@@ -710,3 +718,14 @@ class KnowledgeBase:
         with self._lock:
             return {"status": "ok", "storage": self.storage_status(),
                     "documents": len({c["source_id"] for c in self._chunks}), "chunks": len(self._chunks)}
+
+    def close(self) -> None:
+        """Release storage resources when the application shuts down."""
+        errors: list[Exception] = []
+        for resource in (self._store, self._metadata_store):
+            try:
+                resource.close()
+            except Exception as exc:  # attempt to close both stores
+                errors.append(exc)
+        if errors:
+            raise RuntimeError("One or more knowledge-base stores failed to close.") from errors[0]

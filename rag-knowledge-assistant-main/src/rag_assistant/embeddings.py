@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import math
 import re
 from collections.abc import Sequence
@@ -13,6 +14,14 @@ except Exception:  # pragma: no cover - optional dependency
     np = None
 
 TOKEN_PATTERN = re.compile(r"[a-zA-Z0-9]+")
+_LOCAL_HASH_STOP_WORDS = frozenset({
+    "a", "an", "and", "are", "as", "at", "be", "been", "being", "but", "by", "can", "could",
+    "did", "do", "does", "for", "from", "had", "has", "have", "he", "her", "here", "hers", "him",
+    "his", "how", "i", "if", "in", "into", "is", "it", "its", "me", "my", "of", "on", "or",
+    "our", "ours", "she", "should", "so", "that", "the", "their", "them", "there", "these", "they",
+    "this", "those", "to", "was", "we", "were", "what", "when", "where", "which", "who", "why",
+    "will", "with", "would", "you", "your",
+})
 
 
 @runtime_checkable
@@ -64,11 +73,12 @@ class LocalHashProvider(_BaseProvider):
         for text in texts:
             vector = [0.0] * self._dimensions
             for token in self._tokenize(text):
-                if not token:
+                if not token or token in _LOCAL_HASH_STOP_WORDS:
                     continue
-                vector[(ord(token[0]) + ord(token[-1])) % self._dimensions] += 1.0
-                for char in token:
-                    vector[ord(char) % self._dimensions] += 0.2
+                digest = hashlib.blake2b(token.encode("utf-8"), digest_size=16).digest()
+                index = int.from_bytes(digest[:8], byteorder="little") % self._dimensions
+                sign = 1.0 if digest[8] & 1 else -1.0
+                vector[index] += sign
 
             if normalize:
                 norm = sum(value * value for value in vector) ** 0.5

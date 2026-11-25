@@ -43,6 +43,8 @@ from rag_assistant.knowledge_base import KnowledgeBase
 from rag_assistant.llm import AnswerGenerator, LLMError
 from rag_assistant.metadata import create_metadata_store
 from rag_assistant.models import (
+    AuthConfigResponse,
+    BrowserSessionRequest,
     BulkIngestRequest,
     BulkIngestResponse,
     Citation,
@@ -76,12 +78,18 @@ from rag_assistant.models import (
 from rag_assistant.stores import create_vector_store
 
 app_config = AppConfig.from_env()
+_auth_required = bool(app_config.api_key or app_config.jwt_secret or app_config.ui_password)
+_browser_login_enabled = bool(app_config.ui_password and app_config.jwt_secret)
 
-if app_config.environment == "production" and not app_config.api_key:
+if app_config.ui_password and not app_config.jwt_secret:
+    raise RuntimeError("RAG_UI_PASSWORD requires RAG_JWT_SECRET.")
+if app_config.environment == "production" and not (app_config.api_key or _browser_login_enabled):
     raise RuntimeError(
-        "RAG_ENV=production requires RAG_API_KEY to be set. "
+        "RAG_ENV=production requires RAG_API_KEY or both RAG_UI_PASSWORD and RAG_JWT_SECRET. "
         "Refusing to start with authentication disabled."
     )
+if app_config.jwt_secret and not (app_config.api_key or app_config.ui_password):
+    raise RuntimeError("RAG_JWT_SECRET requires RAG_API_KEY or RAG_UI_PASSWORD to provide a login path.")
 
 answer_generator = AnswerGenerator(
     provider=app_config.llm_provider,
@@ -118,7 +126,7 @@ logging.basicConfig(level=getattr(logging, app_config.log_level.upper(), logging
                     format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger("rag-knowledge-assistant")
 
-if not app_config.api_key:
+if not _auth_required:
     logger.warning(
         "RAG_API_KEY is not set; authentication is DISABLED. "
         "Set RAG_API_KEY before exposing this service beyond localhost."
@@ -129,10 +137,16 @@ app = FastAPI(
     version=__version__,
     description=("Document-grounded RAG API with hybrid retrieval, reranking, citations, "
                  "evidence-gap handling, and knowledge diagnostics."),
-    docs_url="/docs" if (app_config.docs_enabled and not app_config.api_key) else None,
-    redoc_url="/redoc" if (app_config.docs_enabled and not app_config.api_key) else None,
-    openapi_url="/openapi.json" if (app_config.docs_enabled and not app_config.api_key) else None,
+    docs_url="/docs" if (app_config.docs_enabled and not _auth_required) else None,
+    redoc_url="/redoc" if (app_config.docs_enabled and not _auth_required) else None,
+    openapi_url="/openapi.json" if (app_config.docs_enabled and not _auth_required) else None,
 )
+
+
+@app.on_event("shutdown")
+def close_application_resources() -> None:
+    """Close database and vector-store clients cleanly on process shutdown."""
+    kb.close()
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _UI_CANDIDATES = (
@@ -417,15 +431,18 @@ async def _guard_api_key(request: Request, x_api_key: str | None = Header(defaul
         request.state.user_id = "admin"
         request.state.workspace_id = None
         return
-    if app_config.jwt_secret and x_api_key:
-        claims = verify_token(x_api_key, app_config)
+    bearer_token = request.headers.get("authorization", "").removeprefix("Bearer ").strip()
+    token = bearer_token or x_api_key
+    if app_config.jwt_secret and token:
+        claims = verify_token(token, app_config)
         if claims is not None and claims.get("workspace_id"):
             request.state.user_id = claims.get("sub")
             request.state.workspace_id = claims.get("workspace_id")
             return
-    if not app_config.api_key:
+    if not _auth_required:
         return  # development mode: authentication disabled
-    raise HTTPException(status_code=401, detail="Missing or invalid API key.", headers={"WWW-Authenticate": "ApiKey"})
+    raise HTTPException(status_code=401, detail="Missing or invalid API key or session.",
+                        headers={"WWW-Authenticate": "Bearer" if app_config.jwt_secret else "ApiKey"})
 
 
 @app.exception_handler(HTTPException)
@@ -628,8 +645,20 @@ def _build_response(question: str, chunks: list, trace: dict, payload: QueryRequ
                                             "latency_ms": 0.0, "used_llm": False,
                                             "error_category": exc.category, "http_status": exc.status_code})()
         warnings.append(f"{exc} A passage-based fallback is shown.")
+    fallback_abstained = (
+        not generation.used_llm
+        and generation.answer.startswith("I couldn't find sufficient evidence in the indexed documents")
+    )
+    if fallback_abstained:
+        # A semantically retrieved but non-answering passage should not be
+        # presented as a citation for an answer that explicitly abstains.
+        citations = []
+        context = []
+        knowledge_gap = True
+        warnings.append("Retrieved passages did not contain an answer to this question.")
     grounded, citation_verification = _grounded_status(generation.answer, citations, context,
                                                         used_llm=generation.used_llm)
+    grounded = grounded and not fallback_abstained
     logger.info("citation_validation_complete request_id=%s citations=%s grounded=%s",
                 request_id or "-", len(citations), grounded)
     return QueryResponse(answer=generation.answer, grounded=grounded, confidence=confidence, knowledge_gap=knowledge_gap,
@@ -965,11 +994,31 @@ def list_workspaces() -> WorkspacesResponse:
 
 
 @app.post("/auth/token", response_model=TokenResponse, dependencies=[Depends(_guard_api_key)])
-def mint_token(payload: TokenRequest) -> TokenResponse:
+def mint_token(payload: TokenRequest, request: Request) -> TokenResponse:
     """Mint a JWT for a user + workspace (Phase 4.1). Requires a configured RAG_JWT_SECRET."""
     if not app_config.jwt_secret:
         raise HTTPException(status_code=400, detail="RAG_JWT_SECRET is not configured.")
+    if getattr(request.state, "user_id", None) != "admin":
+        raise HTTPException(status_code=403, detail="Only an API-key administrator can mint workspace tokens.")
     return TokenResponse(token=create_token(user_id=payload.user_id, workspace_id=payload.workspace_id,
+                                            app_config=app_config))
+
+
+@app.get("/auth/config", response_model=AuthConfigResponse)
+def auth_config() -> AuthConfigResponse:
+    """Expose only whether browser authentication is required and available."""
+    return AuthConfigResponse(auth_required=_auth_required, browser_login_enabled=_browser_login_enabled)
+
+
+@app.post("/auth/session", response_model=TokenResponse)
+def create_browser_session(payload: BrowserSessionRequest) -> TokenResponse:
+    """Exchange the configured browser passphrase for a short-lived workspace JWT."""
+    if not _browser_login_enabled:
+        raise HTTPException(status_code=404, detail="Browser sign-in is not enabled.")
+    if not hmac.compare_digest(payload.password.encode("utf-8"), app_config.ui_password.encode("utf-8")):
+        raise HTTPException(status_code=401, detail="Invalid sign-in passphrase.",
+                            headers={"WWW-Authenticate": "Bearer"})
+    return TokenResponse(token=create_token(user_id="browser-user", workspace_id=app_config.workspace_default,
                                             app_config=app_config))
 
 

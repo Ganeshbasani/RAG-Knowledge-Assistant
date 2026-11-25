@@ -108,17 +108,39 @@ def _provider_http_error(status_code: int) -> LLMError:
 def extractive_fallback(question: str, context: list[dict[str, Any]], max_sentences: int = 4) -> str:
     """Deterministic extractive answer — always available (no API key needed)."""
     question_terms = set(re.findall(r"[a-zA-Z0-9]+", question.lower()))
+    summary_intent = bool(re.search(
+        r"\b(summar(?:y|ize|ise)|overview|explain|exaplian|describe)\b|\btell me about\b|\bwhat.{0,20}(?:document|file)\b",
+        question,
+        re.IGNORECASE,
+    ))
+    education_intent = bool(re.search(r"\b(qualification|education|degree|college|university|cgpa|marks)\b", question, re.IGNORECASE))
+    if education_intent:
+        question_terms.update({"qualification", "education", "degree", "graduate", "bachelor", "btech", "cgpa", "university"})
     scored: list[tuple[float, str, int]] = []
     for source_index, item in enumerate(context, start=1):
-        for sentence in re.split(r"(?<=[.!?])\s+", item.get("text", "").strip()):
+        text = re.sub(r"\s*\[PAGE\s+\d+\]\s*", " ", item.get("text", "")).strip()
+        if summary_intent:
+            # Resume and report uploads often contain contact details before the
+            # useful summary. Prefer an explicitly labeled summary section.
+            section = re.search(
+                r"(?:PROFESSIONAL\s+SUMMARY|EXECUTIVE\s+SUMMARY|SUMMARY|PROFILE)\s*"
+                r"(.*?)(?=\b(?:SKILLS|WORK\s+EXPERIENCE|EXPERIENCE|EDUCATION|PROJECTS|CERTIFICATES)\b|$)",
+                text,
+                re.IGNORECASE | re.DOTALL,
+            )
+            if section:
+                text = section.group(1).strip()
+        for sentence in re.split(r"(?<=[.!?])\s+|[\r\n]+", text):
             sentence = sentence.strip()
             if not sentence:
+                continue
+            if summary_intent and re.search(r"(?:@|https?://|www\.|\+?\d[\d ()-]{7,})", sentence):
                 continue
             terms = set(re.findall(r"[a-zA-Z0-9]+", sentence.lower()))
             overlap = len(question_terms & terms) / max(1, len(question_terms))
             length_penalty = min(len(sentence) / 500.0, 1.0)
             score = overlap + (0.15 * (1.0 - length_penalty))
-            if overlap > 0:
+            if overlap > 0 or (summary_intent and len(sentence) >= 40):
                 scored.append((score, sentence, source_index))
     scored.sort(key=lambda item: item[0], reverse=True)
     selected: list[str] = []
@@ -129,7 +151,8 @@ def extractive_fallback(question: str, context: list[dict[str, Any]], max_senten
             continue
         selected.append(f"{sentence} [{source_index}]")
         seen.add(key)
-        if len(selected) >= max_sentences:
+        sentence_limit = min(max_sentences, 2) if summary_intent else max_sentences
+        if len(selected) >= sentence_limit:
             break
     if not selected:
         return "I couldn't find sufficient evidence in the indexed documents to answer this question."

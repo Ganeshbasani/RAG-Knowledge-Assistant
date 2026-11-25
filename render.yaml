@@ -5,7 +5,7 @@ services:
     plan: free
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    healthCheckPath: /health
+    healthCheckPath: /ready
     envVars:
       - key: RAG_HOST
         value: 0.0.0.0

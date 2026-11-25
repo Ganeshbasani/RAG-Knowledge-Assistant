@@ -297,10 +297,13 @@ http://127.0.0.1:8000/ui/
 
 **Deployment consideration:** The free Render configuration may sleep and uses ephemeral storage. The default JSON vector index is intended for small, single-instance deployments. Persistent shared storage and horizontal scaling require suitable infrastructure.
 
+For durable Render storage, the least-change option is a paid single-instance service with a disk mounted at `/app/data`, matching the current JSON index and upload directory. The free web tier cannot attach a persistent disk and loses local files on restart or spin-down. An external Postgres database alone is not enough for this app's current default because chunks and vectors still live in the JSON vector store. For a remote-store setup, configure Qdrant with `RAG_VECTOR_STORE=qdrant`, `RAG_QDRANT_URL`, and `RAG_QDRANT_API_KEY`, and configure `RAG_DB_URL` for durable document metadata; Qdrant payloads retain chunk text and metadata, while the original uploaded file bytes remain on local storage unless a separate object-storage integration is added.
+
 ### Render environment variables
 
 - Set `RAG_LLM_PROVIDER=openrouter`, `RAG_LLM_MODEL=openrouter/free`, and either `OPENROUTER_API_KEY` or `RAG_LLM_API_KEY`. The provider key is read only by the server; never put it in frontend code.
-- `RAG_API_KEY` is a separate API authentication secret. The browser UI does not have a sign-in flow for this service key, so leave it unset for the public demo; if it is set, unauthenticated browser requests receive `401` even when OpenRouter is configured correctly.
+- `RAG_API_KEY` is separate from the provider key and protects API routes. Leave it unset for the public demo (rate limits still apply). For a protected browser UI, configure both `RAG_UI_PASSWORD` and `RAG_JWT_SECRET`; the UI exchanges the passphrase for a short-lived JWT held in `sessionStorage`. An API-key-only deployment remains usable by API clients, but the browser UI will show that browser sign-in is not configured.
+- `RAG_UI_PASSWORD` is one shared workspace passphrase, not a per-user identity system. Use a long random value over HTTPS, and use a dedicated identity provider for multi-user production access.
 - `RAG_LLM_CONNECT_TIMEOUT_SECONDS`, `RAG_LLM_READ_TIMEOUT_SECONDS`, `RAG_LLM_MAX_RETRIES`, and optional `RAG_LLM_FALLBACK_MODELS` tune bounded provider retries. `llm_enabled` is a health-response field, not a Render environment variable.
 - Render's free filesystem is temporary. Uploaded documents and the JSON index can disappear after a restart or redeploy; durable persistence needs a persistent disk or an external storage service.
 

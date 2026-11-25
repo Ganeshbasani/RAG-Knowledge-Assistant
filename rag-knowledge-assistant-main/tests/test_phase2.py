@@ -10,7 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from rag_assistant.knowledge_base import KnowledgeBase
-from rag_assistant.llm import AnswerGenerator, LLMError, _rule_based_variants
+from rag_assistant.llm import AnswerGenerator, LLMError, _rule_based_variants, extractive_fallback
 from rag_assistant.sessions import SessionStore
 
 
@@ -58,6 +58,26 @@ def test_answer_generator_rewrite_fallback():
     generator = AnswerGenerator(provider="extractive")
     variants = generator.rewrite_query("budget and manager sign-off")
     assert variants[:2] == ["budget", "manager sign-off"]
+
+
+def test_extractive_fallback_summarizes_document_without_contact_details():
+    answer = extractive_fallback("Exaplian the doc", [{
+        "text": "BASANI GANESH Email: ganesh@example.com. PROFESSIONAL SUMMARY "
+                "2026 Computer Science graduate with experience building Python backend applications. "
+                "Skilled in FastAPI and SQL. SKILLS Python, FastAPI, SQL",
+    }])
+
+    assert "2026 Computer Science graduate" in answer
+    assert "Skilled in FastAPI and SQL" in answer
+    assert "ganesh@example.com" not in answer
+
+
+def test_extractive_fallback_maps_qualification_to_education_terms():
+    answer = extractive_fallback("What is the qualification?", [{
+        "text": "Education: B.Tech in Computer Science and Engineering, CGPA 8.03/10.",
+    }])
+
+    assert "B.Tech in Computer Science" in answer
 
 
 def test_kb_multiquery_retrieves_variant_terms():
